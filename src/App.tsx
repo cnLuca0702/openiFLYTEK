@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { MemoryHub } from './components/MemoryHub';
 import { Header } from './components/Header';
 import { MeetingSidebar } from './components/MeetingSidebar';
 import { TranscriptionWorkspace } from './components/TranscriptionWorkspace';
@@ -6,7 +7,7 @@ import { AiSummaryPanel } from './components/AiSummaryPanel';
 import { SuspendQuickWindow } from './components/SuspendQuickWindow';
 import { NotebookHubModal } from './components/NotebookHubModal';
 import { SettingsModal } from './components/SettingsModal';
-import { api, onTokenExpired } from './services/api';
+import { api, onTokenExpired, MemoryCitation } from './services/api';
 import { Meeting, DevicesStatusResponse, OfficeNotebookNote, Sentence } from './types';
 import { useToast } from './hooks/useToast';
 import { ToastViewport } from './components/Toast';
@@ -14,7 +15,10 @@ import { ConfirmHost } from './components/ConfirmHost';
 
 export const App: React.FC = () => {
   const toast = useToast();
+  const [memoryOpen,setMemoryOpen] = useState(false);
+  const [memorySource,setMemorySource] = useState<MemoryCitation|null>(null);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
+  const [memorySeek, setMemorySeek] = useState<{ meetingId: string; startMs: number; request: number } | null>(null);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
   const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   const [deviceStatus, setDeviceStatus] = useState<DevicesStatusResponse | null>(null);
@@ -546,10 +550,20 @@ export const App: React.FC = () => {
     }
   };
 
+  const openMemorySource = async (citation:MemoryCitation) => {
+    const evidence = await api.memoryEvidence(citation);
+    if(evidence.sourceType==='document') {setMemorySource(evidence);setMemoryOpen(true);return;}
+    if(isRecording)throw new Error('正在录音，结束录音后可定位播放');
+    const detail=await api.getMeetingDetail(evidence.meetingId);
+    if(!detail)throw new Error('来源会议已不可读取');
+    setMemoryOpen(false);setSelectedMeetingId(detail.id);setSelectedMeeting(detail);
+    setMemorySeek({meetingId:detail.id,startMs:evidence.startMs,request:Date.now()});
+  };
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-viaim-bg text-viaim-textMain select-none">
       {/* 顶部主导航栏（符合 Mac 沉浸式风格与原生交通灯对齐） */}
-      <Header deviceStatus={deviceStatus} />
+      <Header deviceStatus={deviceStatus} onOpenMemory={()=>{setMemorySource(null);setMemoryOpen(true);}} />
+      <MemoryHub open={memoryOpen} onClose={()=>setMemoryOpen(false)} source={memorySource} onOpenMemory={openMemorySource} />
 
       {/* 桌面端三栏工作台主体 */}
       <div className="flex flex-1 overflow-hidden">
@@ -573,6 +587,7 @@ export const App: React.FC = () => {
         <div className="flex-1 overflow-hidden flex flex-col border-r border-viaim-border">
           <TranscriptionWorkspace
             meeting={isRecording ? null : selectedMeeting}
+            memorySeek={memorySeek}
             onUpdateTitle={handleUpdateTitle}
             onSentenceEdit={handleSentenceEdit}
             isRecording={isRecording}
@@ -590,6 +605,7 @@ export const App: React.FC = () => {
           <AiSummaryPanel
             meeting={selectedMeeting}
             meetings={meetings}
+            onOpenMemory={openMemorySource}
             onGenerateAiSummary={handleGenerateAiSummary}
             isGeneratingAi={isGeneratingAi}
             onToggleTodo={handleToggleTodo}

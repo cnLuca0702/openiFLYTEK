@@ -17,6 +17,7 @@ import { Meeting, Sentence } from '../types';
 
 interface TranscriptionWorkspaceProps {
   meeting: Meeting | null;
+  memorySeek?: { meetingId: string; startMs: number; request: number } | null;
   onUpdateTitle: (newTitle: string) => void;
   onSentenceEdit: (sentenceId: string, newText: string) => void;
   isRecording: boolean;
@@ -30,6 +31,7 @@ interface TranscriptionWorkspaceProps {
 
 export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
   meeting,
+  memorySeek,
   onUpdateTitle,
   onSentenceEdit,
   isRecording,
@@ -63,6 +65,18 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
       }
     }
   }, [meeting?.id]);
+
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio || !memorySeek || memorySeek.meetingId !== meeting?.id || isRecording) return;
+    const seek = () => {
+      audio.currentTime = Math.max(0, memorySeek.startMs / 1000);
+      audio.play().then(() => setIsPlaying(true)).catch(() => setAudioError('已定位到引用位置，请点击播放'));
+    };
+    if (audio.readyState >= 1) seek();
+    else audio.addEventListener('loadedmetadata', seek, { once: true });
+    return () => audio.removeEventListener('loadedmetadata', seek);
+  }, [memorySeek, meeting?.id, isRecording]);
 
   const handleAudioTimeUpdate = () => {
     if (audioRef.current && !isNaN(audioRef.current.duration) && audioRef.current.duration > 0) {

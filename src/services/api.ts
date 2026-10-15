@@ -2,6 +2,53 @@ import { Meeting, Sentence, AiSummary, TodoItem, OfficeNotebookDevice, OfficeNot
 
 const BASE_URL = 'http://localhost:3800/api';
 
+export interface MemoryCitation {
+  sourceType?: "meeting" | "document";
+  pages?: number[];
+  location?: string;
+  ref: number;
+  chunkId: number;
+  meetingId: string;
+  version: string;
+  title: string;
+  occurredAt: string;
+  startMs: number;
+  endMs: number;
+  excerpt: string;
+  sentenceIds: string[];
+}
+
+export interface MemoryProject {
+  id: string;
+  name: string;
+  scope: string;
+  code: string;
+  aliases: string[];
+  linked: boolean;
+  ambiguous: boolean;
+  states: Array<{
+    aspect: string;
+    property: string;
+    status: 'current' | 'conflict' | 'uncertain';
+    currentFactIds: string[];
+    links: Array<{ from: string; to: string; evidenceFactId: string; effectiveAt: string }>;
+    history: Array<{
+      id: string;
+      chunkId: number;
+      value: string;
+      normalizedValue: string;
+      status: 'current' | 'superseded' | 'proposed' | 'scheduled' | 'uncertain';
+      supersededBy: string | null;
+      observedAt: string;
+      effectiveAt: string | null;
+      recordedAt: string;
+      quote: string;
+      dateUncertain: boolean;
+      ref: number;
+    }>;
+  }>;
+}
+
 // 办公本推送结果（每个目标独立成功/失败）
 export interface NotebookPushTargetResult {
   ok: boolean;
@@ -56,7 +103,18 @@ async function apiFetch(url: string, init?: RequestInit): Promise<any> {
   return json;
 }
 
+export interface DocumentInfo {id:string;name:string;ext:string;digest:string;uploadedAt:string;status:string;error:string;pageCount:number;interpreted:number;materialDate:string;replaces:string}
+export interface DocumentDetail extends DocumentInfo {pages:Array<{number:number;label:string;text:string;image:boolean;ledger?:{facts:string;charts:string}}> ;knowledge:Array<{overview:string;units:Array<{question:string;answer:string;basis:string;pages:number[]}>}>}
+export interface MemoryInsights {pending:number;citations:MemoryCitation[];followups:Array<{id:string;type:string;scope:string;project:string;item:string;status:string;owners:string[];dueDate:string|null;overdue:boolean;history:Array<{id:string;chunkId:number;quote:string;observedAt:string}>}>;changes:Array<{scope:string;project:string;aspect:string;status:string;history:Array<{id:string;chunkId:number;quote:string}>}>}
+async function memoryRequest<T>(url:string,options?:RequestInit):Promise<T> {const res=await fetch(`${BASE_URL}${url}`,options);const data=await res.json();if(!res.ok||data.code!=='000000')throw new Error(data.desc||'记忆请求失败');return data.data;}
 export const api = {
+  documents: () => memoryRequest<DocumentInfo[]>('/documents'),
+  document: (id:string) => memoryRequest<DocumentDetail>(`/documents/${encodeURIComponent(id)}`),
+  uploadDocument: (file:File,replaces?:string) => { if(file.size>40*1024*1024||!file.size)return Promise.reject(new Error('文件不能为空，单文件最大40MB')); return memoryRequest<DocumentInfo>(`/documents?name=${encodeURIComponent(file.name)}&replaces=${encodeURIComponent(replaces||'')}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file}); },
+  deleteDocument: (id:string) => memoryRequest<boolean>(`/documents/${encodeURIComponent(id)}`,{method:'DELETE'}),
+  retryDocument: (id:string) => memoryRequest<boolean>(`/documents/${encodeURIComponent(id)}/retry`,{method:'POST'}),
+  documentFile: (id:string,kind:string,page?:number) => `${BASE_URL}/documents/${encodeURIComponent(id)}/file/${kind}${page?`?page=${page}`:''}`,
+  memoryInsights: (meetingId?:string) => memoryRequest<MemoryInsights>(`/memory/insights${meetingId?`?meetingId=${encodeURIComponent(meetingId)}`:''}`),
   // 获取用户真实个人资料（从 setting.ini 读取）
   async getUserProfile(): Promise<UserProfile> {
     const res = await fetch(`${BASE_URL}/user/profile`);
@@ -131,7 +189,7 @@ export const api = {
   },
 
   // AI 问答：@ 一条或多条录音作为上下文，可指定已配置的模型回答
-  async aiChat(payload: { question: string; meetingIds: string[]; providerId?: string; model?: string }): Promise<{ answer: string; model: string }> {
+  async aiChat(payload: { question: string; meetingIds: string[]; currentMeetingId?: string; providerId?: string; model?: string }): Promise<{ answer: string; model: string; citations?: MemoryCitation[]; projects?: MemoryProject[]; memoryWarnings?: string[] }> {
     const json = await apiFetch(`${BASE_URL}/ai/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -142,6 +200,17 @@ export const api = {
       error.code = json?.code;
       throw error;
     }
+    return json.data;
+  },
+
+  async relatedMemories(meetingId: string): Promise<MemoryCitation[]> {
+    const json = await apiFetch(`${BASE_URL}/memory/related/${encodeURIComponent(meetingId)}`);
+    return json?.code === '000000' ? json.data : [];
+  },
+
+  async memoryEvidence(citation: MemoryCitation): Promise<MemoryCitation> {
+    const json = await apiFetch(`${BASE_URL}/memory/evidence/${citation.chunkId}?version=${encodeURIComponent(citation.version)}`);
+    if (json?.code !== '000000') throw new Error(json?.desc || '来源暂不可读取');
     return json.data;
   },
 

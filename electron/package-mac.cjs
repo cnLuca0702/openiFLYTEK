@@ -1,6 +1,6 @@
 const fs = require('node:fs');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
+const { execSync, execFileSync } = require('node:child_process');
 
 const rootDir = path.join(__dirname, '..');
 const distMacDir = path.join(rootDir, 'dist_mac');
@@ -44,8 +44,9 @@ execSync(`cp -R "${path.join(rootDir, 'server')}" "${appResourcesDir}/"`);
 execSync(`cp -R "${path.join(rootDir, 'electron')}" "${appResourcesDir}/"`);
 execSync(`cp "${path.join(rootDir, 'package.json')}" "${appResourcesDir}/"`);
 
-// 软链接 node_modules 保证极速打包与依赖复用
-execSync(`ln -s "${path.join(rootDir, 'node_modules')}" "${path.join(appResourcesDir, 'node_modules')}"`);
+// Install a self-contained runtime; never link back into the build checkout.
+fs.copyFileSync(path.join(rootDir, 'package-lock.json'), path.join(appResourcesDir, 'package-lock.json'));
+execFileSync('npm', ['ci', '--omit=dev', '--ignore-scripts', '--no-audit', '--no-fund'], { cwd: appResourcesDir, stdio: 'inherit' });
 
 // 4. 替换原生应用图标
 if (fs.existsSync(iconSrc)) {
@@ -70,6 +71,9 @@ if (fs.existsSync(plistPath)) {
 
   fs.writeFileSync(plistPath, plist, 'utf-8');
 }
+
+execFileSync('codesign', ['--force', '--deep', '--sign', '-', targetApp], { stdio: 'inherit' });
+execFileSync('codesign', ['--verify', '--deep', '--strict', targetApp], { stdio: 'inherit' });
 
 console.log('[Mac Packager] Success! Standalone Mac app created at:');
 console.log(targetApp);

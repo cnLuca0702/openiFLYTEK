@@ -1,3 +1,4 @@
+import { AutomaticFollowup } from './AutomaticFollowup';
 import React, { useState, useEffect, useRef } from 'react';
 import {
   Sparkles,
@@ -18,12 +19,14 @@ import {
   X,
   Cpu
 } from 'lucide-react';
+import { MemoryState } from './MemoryState';
 import { Meeting, OfficeNotebookDevice } from '../types';
-import { api } from '../services/api';
+import { api, MemoryCitation, MemoryProject } from '../services/api';
 
 interface AiSummaryPanelProps {
   meeting: Meeting | null;
   meetings: Meeting[];
+  onOpenMemory: (citation: MemoryCitation) => Promise<void>;
   onGenerateAiSummary: (options?: { force?: boolean }) => void;
   isGeneratingAi: boolean;
   onToggleTodo: (todoId: string) => void;
@@ -39,6 +42,7 @@ interface AiSummaryPanelProps {
 export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
   meeting,
   meetings,
+  onOpenMemory,
   onGenerateAiSummary,
   isGeneratingAi,
   onToggleTodo,
@@ -52,6 +56,17 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
 }) => {
   const [activeTab, setActiveTab] = useState<'summary' | 'notebook' | 'chat'>('chat');
   const [chatInput, setChatInput] = useState('');
+  const [relatedMemories, setRelatedMemories] = useState<MemoryCitation[]>([]);
+  const [memoryError, setMemoryError] = useState('');
+  useEffect(() => {
+    let cancelled = false;
+    setRelatedMemories([]);
+    setMemoryError('');
+    if (activeTab === 'summary' && meeting?.id) {
+      api.relatedMemories(meeting.id).then((items) => { if (!cancelled) setRelatedMemories(items); }).catch(() => {});
+    }
+    return () => { cancelled = true; };
+  }, [activeTab, meeting?.id, meeting?.aiSummary?.summaryFull]);
   const [authPassword, setAuthPassword] = useState('');
   const [authBusy, setAuthBusy] = useState(false);
   const [authError, setAuthError] = useState('');
@@ -70,8 +85,8 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
       setAuthBusy(false);
     }
   };
-  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string }>>([
-    { role: 'assistant', content: '您好！我是 OpeniFLYTEK 会议 AI 助手。\n\n输入 @ 可以选择一条或多条录音作为提问的上下文范围；也可以在下方切换用于回答的模型。' }
+  const [chatMessages, setChatMessages] = useState<Array<{ role: 'user' | 'assistant'; content: string; citations?: MemoryCitation[]; projects?: MemoryProject[]; memoryWarnings?: string[] }>>([
+    { role: 'assistant', content: '您好！我是 OpeniFLYTEK 会议 AI 助手。\n\n直接提问，我会自动查找会议和文档并提供原文来源。输入 @ 可限定会议范围。会议会在后台自动整理为记忆，无需手动收录。' }
   ]);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null); // @ 触发中的检索词
   const [mentionedMeetings, setMentionedMeetings] = useState<Meeting[]>([]); // 已选上下文录音
@@ -150,10 +165,6 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
   const handleSendChat = async () => {
     const q = chatInput.trim();
     if (!q || isChatLoading) return;
-    if (mentionedMeetings.length === 0) {
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: '请先在输入框中输入 @ 选择至少一条录音作为提问上下文。' }]);
-      return;
-    }
     const chosen = modelOptions.find((o) => o.key === selectedModelKey);
     const displayQuestion = mentionedMeetings.map((m) => `@《${m.title}》`).join(' ') + ' ' + q;
 
@@ -164,11 +175,12 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
     try {
       const result = await api.aiChat({
         question: q,
+        currentMeetingId: meeting?.id,
         meetingIds: mentionedMeetings.map((m) => m.id),
         providerId: chosen?.providerId,
         model: chosen?.model
       });
-      setChatMessages((prev) => [...prev, { role: 'assistant', content: result.answer || '（模型未返回内容，请重试或更换模型）' }]);
+      setChatMessages((prev) => [...prev, { role: 'assistant', content: result.answer || '（模型未返回内容，请重试或更换模型）', citations: result.citations, projects: result.projects, memoryWarnings: result.memoryWarnings }]);
     } catch (err: any) {
       setChatMessages((prev) => [...prev, { role: 'assistant', content: `问答失败：${err?.message || '未知错误'}` }]);
     } finally {
@@ -261,6 +273,25 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
                   {summary.abstract || (summary.summaryFull ? summary.summaryFull.substring(0, 200) + '...' : '')}
                 </p>
               </div>
+
+              {meeting && <AutomaticFollowup meetingId={meeting.id} onOpen={onOpenMemory} />}
+              {relatedMemories.length > 0 && (
+                <div className="p-3.5 rounded-xl bg-viaim-card/80 border border-viaim-border space-y-2">
+                  <h4 className="text-xs font-bold text-cyan-300">自动关联的历史线索</h4>
+                  <p className="text-[10px] text-viaim-textDim">来自其他会议或文档，仅供核对背景，不属于本次决议。</p>
+                  {relatedMemories.map((citation) => (
+                    <details key={citation.chunkId} className="text-[11px] text-slate-300">
+                      <summary className="cursor-pointer">{citation.title} · {citation.occurredAt ? new Date(citation.occurredAt).toLocaleDateString('zh-CN') : '时间未知'}</summary>
+                      <p className="whitespace-pre-wrap max-h-40 overflow-auto select-text mt-2">{citation.excerpt}</p>
+                      <button className="text-cyan-300 cursor-pointer mt-1" onClick={async () => {
+                        try { await onOpenMemory(citation); }
+                        catch (err: any) { setMemoryError(err?.message || '来源暂不可读取'); }
+                      }}>查看来源</button>
+                    </details>
+                  ))}
+                  {memoryError && <p className="text-xs text-amber-400">{memoryError}</p>}
+                </div>
+              )}
 
               {/* 关键议题 */}
               {summary.topics && summary.topics.length > 0 && (
@@ -495,6 +526,26 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
                   }`}
                 >
                   {msg.content}
+                  <MemoryState projects={msg.projects || []} warnings={msg.memoryWarnings || []}
+                    citations={msg.citations || []} onOpen={onOpenMemory} />
+                  {!!msg.citations?.length && (
+                    <div className="mt-3 pt-2 border-t border-viaim-border space-y-2 whitespace-normal">
+                      <div className="text-[10px] text-cyan-300">依据的会议原文（检索片段，非全量结论）</div>
+                      {msg.citations.map((citation) => (
+                        <details key={citation.chunkId} className="text-[11px]">
+                          <summary className="cursor-pointer text-cyan-200">
+                            [{citation.ref}] {citation.title} · {citation.sourceType==='document' ? (citation.location || `来源页 ${citation.pages?.join('、')}`) : `${Math.floor(citation.startMs / 60000)}:${String(Math.floor(citation.startMs / 1000) % 60).padStart(2, '0')}`}
+                          </summary>
+                          <div className="text-viaim-textDim mt-1">{citation.occurredAt ? new Date(citation.occurredAt).toLocaleString('zh-CN') : '会议时间未知'} · 回答时的原文</div>
+                          <p className="whitespace-pre-wrap mt-1 max-h-48 overflow-auto select-text">{citation.excerpt}</p>
+                          <button className="mt-1 text-cyan-300 hover:text-white cursor-pointer" onClick={async () => {
+                            try { await onOpenMemory(citation); }
+                            catch (err: any) { setChatMessages((prev) => [...prev, { role: 'assistant', content: err?.message || '来源暂不可读取' }]); }
+                          }}>打开来源</button>
+                        </details>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
             ))}
@@ -513,6 +564,7 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
           </div>
 
           <div className="p-3 border-t border-viaim-border bg-viaim-bg/80 shrink-0 space-y-2">
+            <div className="text-[10px] text-viaim-textDim">{mentionedMeetings.length ? '范围：所选会议' : '范围：自动检索会议和文档'} · 后台记忆整理使用已配置的模型，可能产生用量</div>
             {/* 已 @ 的上下文录音（chips） */}
             {mentionedMeetings.length > 0 && (
               <div className="flex flex-wrap gap-1.5">
@@ -541,7 +593,7 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
                 <input
                   ref={chatInputRef}
                   type="text"
-                  placeholder="输入 @ 选择录音上下文，再提出你的问题…"
+                  placeholder="直接提问历史会议，@ 可限定范围…"
                   value={chatInput}
                   onChange={(e) => handleChatInputChange(e.target.value)}
                   onKeyDown={(e) => {

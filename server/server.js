@@ -11,6 +11,7 @@ import { NotebookPushService } from './notebook_push_service.js';
 import { notebookStore } from './notebook_store.js';
 import { NotebookIntegrationService } from './notebook_integration_service.js';
 import { streamLocalMedia } from './media_stream.js';
+import { createMemoryService } from './memory_service.js';
 import { LegacyMigrationService } from './legacy_migration_service.js';
 import { publicProviders } from './llm_providers.js';
 import { getPublicConfig, updateProviderConfig, saveConfig } from './llm_config.js';
@@ -40,6 +41,7 @@ function isProjectMeetingId(meetingId) {
 }
 
 function getMeetingDetailById(meetingId) {
+  if (meetingId.startsWith('document:')) return documents?.source(meetingId);
   const isProject = isProjectMeetingId(meetingId);
   const meeting = isProject
     ? notebookStore.getProjectMeeting(meetingId)
@@ -54,6 +56,59 @@ function getMeetingDetailById(meetingId) {
   }
   return meeting;
 }
+
+// Optional projection: failure must not prevent the existing backend from starting.
+let documents = null;
+let memory = null;
+try { memory = createMemoryService(getMeetingDetailById); }
+catch (_) { console.warn('[Memory] 自动记忆暂不可用，原有会议功能不受影响'); }
+try { if (memory) {
+  const {DocumentService} = await import('./document_service.js');
+  documents = new DocumentService({memory});
+  memory.listGroups.push({list: () => documents.list().filter(d => d.status === 'ready'), owns: id => id.startsWith('document:')});
+} } catch (_) { console.warn('[Documents] 文档处理暂不可用，原有会议功能不受影响'); }
+app.get('/api/documents', (_req,res) => res.json({code:'000000',data:documents?.list() || []}));
+app.post('/api/documents', express.raw({type:'application/octet-stream',limit:'40mb'}), (req,res) => {
+  try {
+    if (!documents) throw new Error('记忆存储暂不可用');
+    const result=documents.upload(String(req.query.name || ''),req.body,String(req.query.replaces || ''));
+    res.json({code:'000000',data:result}); void documents.tick();
+  } catch(e) {res.status(400).json({code:'DOCUMENT_UPLOAD_FAILED',desc:e.message});}
+});
+app.get('/api/documents/:id', (req,res) => {
+  const data=documents?.detail(req.params.id);
+  if(!data)return res.status(404).json({desc:'文档不存在'});
+  res.json({code:'000000',data});
+});
+app.get('/api/documents/:id/file/:kind', (req,res) => {
+  const file=documents?.file(req.params.id,req.params.kind,req.query.page);
+  if(!file||!fs.existsSync(file))return res.status(404).json({desc:'来源文件不可用'});
+  res.setHeader('X-Content-Type-Options','nosniff');
+  if(req.params.kind==='page')return res.type('png').sendFile(file);
+  res.download(file,req.params.kind==='knowledge'?'knowledge.md':documents.row(req.params.id).name);
+});
+app.delete('/api/documents/:id', (req,res) => {documents?.remove(req.params.id);res.json({code:'000000',data:true});});
+app.post('/api/documents/:id/retry', (req,res) => {documents?.retry(req.params.id);void documents?.tick();res.json({code:'000000',data:true});});
+app.get('/api/memory/insights', async (req,res) => {
+  try {await memory?.sync();res.json({code:'000000',data:memory?.insights(typeof req.query.meetingId==='string'?req.query.meetingId:undefined)||{followups:[],changes:[],citations:[],pending:0}});} catch (_) {res.status(503).json({desc:'自动跟进暂不可用'});}
+});
+app.get('/api/memory/status', (_req, res) => {
+  res.json({ code: '000000', data: memory ? { available: memory.available, ...memory.store.status() } : { available: false } });
+});
+app.get('/api/memory/related/:id', async (req, res) => {
+  try {
+    const meeting = getMeetingDetailById(req.params.id);
+    if (!meeting || !memory) return res.json({ code: '000000', data: [] });
+    const question = [meeting.title, ...(meeting.aiSummary?.topics || []).slice(0, 3)].join(' ');
+    const hits = (await memory.recall(question)).filter((c) => c.meetingId !== meeting.id).slice(0, 3);
+    res.json({ code: '000000', data: hits.map((c, i) => ({ ...c, ref: i + 1 })) });
+  } catch (_) { res.json({ code: '000000', data: [] }); }
+});
+app.get('/api/memory/evidence/:id', (req, res) => {
+  const evidence = memory?.evidence(Number(req.params.id), String(req.query.version || ''));
+  if (!evidence) return res.status(409).json({ code: 'MEMORY_SOURCE_CHANGED', desc: '来源已更新、删除或暂不可读取，请重新提问' });
+  res.json({ code: '000000', data: evidence });
+});
 
 // 读取本机真实的 VIAIM 用户配置文件
 function getViaimUserProfile() {
@@ -185,6 +240,7 @@ app.post('/api/meetings/record', (req, res) => {
       audioMime,
     });
 
+    memory?.remember(created);
     res.json({ code: '000000', data: created });
   } catch (err) {
     res.status(500).json({ code: '500', desc: `保存会议记录失败: ${err.message}` });
@@ -211,6 +267,7 @@ app.delete('/api/meetings/:id', (req, res) => {
       return res.status(409).json({ code: 'VIAIM_READ_ONLY', desc: 'VIAIM 外部数据库已设为只读；历史办公本记录请通过迁移工具替换后再软删除' });
     }
     const result = notebookStore.deleteProjectMeeting(req.params.id);
+    memory?.forget(req.params.id);
     res.json({ code: '000000', data: result });
   } catch (err) {
     res.status(500).json({ code: '500', desc: `删除会议失败: ${err.message}` });
@@ -221,6 +278,7 @@ app.delete('/api/meetings/:id', (req, res) => {
 app.post('/api/meetings/:id/transcribe', async (req, res) => {
   try {
     const meeting = await transcribeMeetingAudio(req.params.id);
+    memory?.remember(meeting);
     res.json({ code: '000000', data: meeting, desc: '转写完成' });
   } catch (err) {
     res.status(500).json({ code: '500', desc: err.message || '音频转写失败' });
@@ -248,19 +306,22 @@ app.post('/api/meetings/:id/generate-ai', async (req, res) => {
 
 // ======================== 大模型服务商配置 ========================
 
-// 6.x AI 问答：@ 一条或多条录音作为上下文，可指定已配置的模型回答
+// AI 问答默认自动检索会议记忆；@ 仍可限定范围，记忆不可用时保留原有指定会议路径。
 app.post('/api/ai/chat', async (req, res) => {
   try {
-    const { question, meetingIds = [], providerId, model } = req.body || {};
+    const { question, meetingIds = [], currentMeetingId, providerId, model } = req.body || {};
     if (!question || !String(question).trim()) {
       return res.status(400).json({ code: '400', desc: '问题不能为空' });
     }
     const ids = Array.isArray(meetingIds)
       ? meetingIds.filter((id) => typeof id === 'string' && id.trim()).slice(0, 5)
       : [];
-    if (!ids.length) {
-      return res.status(400).json({ code: '400', desc: '请先通过 @ 选择至少一条录音作为回答上下文' });
+    if (memory) {
+      const answer = await memory.answer({ question: String(question).trim().slice(0, 4000), meetingIds: ids, currentMeetingId: typeof currentMeetingId === 'string' ? currentMeetingId : undefined,
+        providerId: providerId || undefined, model: typeof model === 'string' ? model.trim() : undefined });
+      return res.json({ code: '000000', data: answer });
     }
+    if (!ids.length) return res.status(503).json({ code: 'MEMORY_UNAVAILABLE', desc: '自动记忆暂不可用，可通过 @ 选择会议继续问答' });
 
     const parts = [];
     for (const id of ids) {
@@ -594,6 +655,7 @@ app.get('/api/notebook/notes/:id/audio', (req, res) => {
 app.post('/api/notebook/notes/:id/import', async (req, res) => {
   try {
     const meeting = await notebookIntegration.importNote(req.params.id);
+    memory?.remember(meeting);
     res.json({ code: '000000', data: meeting });
   } catch (err) {
     const status = err.code === 401 ? 401 : (err.code === 'AUDIO_NOT_READY' ? 409 : 500);
@@ -966,6 +1028,8 @@ wss.on('connection', (ws) => {
 });
 
 server.listen(port, () => {
+  memory?.start();
+  documents?.start();
   console.log(`[VIAIM-Notebook Assistant] Real Server running on http://localhost:${port}`);
   console.log('[Database] VIAIM kitdb.db is read-only; project meetings and notebook cache use VIAIM Studio/notebook-store');
 });

@@ -5,9 +5,10 @@ import appIcon from '../assets/app-icon.png';
 
 interface HeaderProps {
   deviceStatus: DevicesStatusResponse | null;
+  onOpenMemory: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ deviceStatus }) => {
+export const Header: React.FC<HeaderProps> = ({ deviceStatus, onOpenMemory }) => {
   const user = deviceStatus?.user;
 
   return (
@@ -18,6 +19,7 @@ export const Header: React.FC<HeaderProps> = ({ deviceStatus }) => {
       {/* 左侧弹性空区：整体留白（为 macOS 红绿灯按钮预留） */}
       <div className="flex-1 min-w-0" />
 
+      <button onClick={onOpenMemory} className="text-sm text-cyan-300 px-3 py-1.5 rounded bg-slate-800" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>记忆与资料</button>
       {/* 用户（右对齐） */}
       <div
         className="flex items-center gap-2 shrink-0"

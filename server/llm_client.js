@@ -34,7 +34,7 @@ function httpErrorMessage(status, bodyText, provider) {
   return `${label} 请求失败（HTTP ${status}）: ${brief}`;
 }
 
-async function openAiCompatibleChat({ runtime, provider, system, user, temperature, maxTokens, json }) {
+async function openAiCompatibleChat({ runtime, provider, system, user, temperature, maxTokens, json, signal }) {
   const baseUrl = String(runtime.baseUrl || provider.defaultBaseUrl || '').replace(/\/+$/, '');
   const model = runtime.model || provider.defaultModel;
   const apiKey = runtime.apiKey;
@@ -60,6 +60,7 @@ async function openAiCompatibleChat({ runtime, provider, system, user, temperatu
   const send = async (withJsonMode) => {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
+      signal,
       headers: {
         'Content-Type': 'application/json',
         ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
@@ -90,7 +91,7 @@ async function openAiCompatibleChat({ runtime, provider, system, user, temperatu
   return { content, model, raw: data };
 }
 
-async function chatGptResponses({ runtime, provider, system, user, maxTokens, json }) {
+async function chatGptResponses({ runtime, provider, system, user, maxTokens, json, signal }) {
   const tokens = await ensureFreshChatGptToken();
   const baseUrl = String(runtime.baseUrl || provider.defaultBaseUrl || 'https://chatgpt.com/backend-api/codex').replace(/\/+$/, '');
   const model = runtime.model || provider.defaultModel;
@@ -98,6 +99,7 @@ async function chatGptResponses({ runtime, provider, system, user, maxTokens, js
 
   const res = await fetch(`${baseUrl}/responses`, {
     method: 'POST',
+    signal,
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${tokens.accessToken}`,
@@ -113,7 +115,7 @@ async function chatGptResponses({ runtime, provider, system, user, maxTokens, js
         {
           type: 'message',
           role: 'user',
-          content: [{ type: 'input_text', text: json ? `${user}\n\n只输出 JSON，不要包含任何解释或 Markdown 代码块。` : user }],
+          content: Array.isArray(user) ? user.map(part => part.type === 'image_url' ? { type: 'input_image', image_url: part.image_url.url } : { type: 'input_text', text: part.text }) : [{ type: 'input_text', text: json ? `${user}\n\n只输出 JSON，不要包含任何解释或 Markdown 代码块。` : user }],
         },
       ],
       store: false,
@@ -170,14 +172,14 @@ async function chatGptResponses({ runtime, provider, system, user, maxTokens, js
 }
 
 // 统一入口
-export async function chat({ system, user, temperature = 0.3, maxTokens = 2048, json = false, providerId, override } = {}) {
+export async function chat({ system, user, temperature = 0.3, maxTokens = 2048, json = false, providerId, override, signal } = {}) {
   const runtime = applyOverride(resolveProviderRuntime(providerId), override);
   const provider = getProvider(runtime.id);
   if (!provider) throw new Error('未配置大模型服务商，请前往「设置 → 大模型引擎」选择并配置');
   if (provider.kind === 'chatgpt-oauth') {
-    return chatGptResponses({ runtime, provider, system, user, maxTokens, json });
+    return chatGptResponses({ runtime, provider, system, user, maxTokens, json, signal });
   }
-  return openAiCompatibleChat({ runtime, provider, system, user, temperature, maxTokens, json });
+  return openAiCompatibleChat({ runtime, provider, system, user, temperature, maxTokens, json, signal });
 }
 
 // 连通性测试（可传入 override 以测试尚未保存的表单值）
