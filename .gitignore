@@ -1,0 +1,21 @@
+# 依赖与构建产物
+node_modules/
+dist/
+dist_mac/
+
+# 生成物与本地输出
+outputs/
+exports/
+
+# 本地工作目录
+agent/
+.agents/
+.claude/
+.work/
+.trae/
+.vscode/
+
+# 系统与工具缓存
+.DS_Store
+*.tsbuildinfo
+*.log
