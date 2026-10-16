@@ -1,8 +1,10 @@
-const { app, BrowserWindow, Menu, ipcMain, shell, systemPreferences, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, ipcMain, shell, systemPreferences, nativeImage, dialog } = require('electron');
 const path = require('node:path');
 const { fork } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
+const {checkBackend, waitForBackend} = require('./backend-health.cjs');
+const {version} = require('../package.json');
 
 let mainWindow = null;
 let serverProcess = null;
@@ -23,25 +25,19 @@ function isPortInUse(port) {
 
 // 启动内部 Real Backend 服务 (Port 3800)
 async function startBackendServer() {
-  try {
-    const inUse = await isPortInUse(3800);
-    if (inUse) {
-      console.log('[Electron] Backend already active on port 3800');
-      return;
-    }
-
-    const serverPath = path.join(__dirname, '../server/server.js');
-    if (fs.existsSync(serverPath)) {
-      serverProcess = fork(serverPath, [], {
-        execArgv: ['--experimental-sqlite'],
-        env: { ...process.env, PORT: '3800' },
-        stdio: 'inherit'
-      });
-      console.log('[Electron] Real backend service spawned (PID:', serverProcess.pid, ')');
-    }
-  } catch (err) {
-    console.error('[Electron] Failed to start backend server:', err);
+  if (await isPortInUse(3800)) {
+    if (await checkBackend(3800, version)) return;
+    throw new Error('端口 3800 正被旧版或其他后端占用，无法连接当前版本。请先保存录音，完全退出旧版 OpeniFLYTEK；如果另行启动过 npm run server / npm start，也请停止该服务，然后重新打开应用。');
   }
+  const serverPath = path.join(__dirname, '../server/server.js');
+  if (!fs.existsSync(serverPath)) throw new Error('应用缺少内置服务文件，请重新安装。');
+  serverProcess = fork(serverPath, [], {
+    execArgv: ['--experimental-sqlite'],
+    env: { ...process.env, PORT: '3800' },
+    stdio: 'inherit'
+  });
+  serverProcess.on('error', error => { serverProcess.spawnError = error; });
+  await waitForBackend(3800, version, serverProcess);
 }
 
 // 创建 Mac 主窗口
@@ -217,8 +213,14 @@ app.whenReady().then(async () => {
 
   await requestMacPermissions();
   setupMacMenu();
-  await startBackendServer();
-  createMainWindow();
+  try {
+    await startBackendServer();
+    createMainWindow();
+  } catch (error) {
+    dialog.showErrorBox('OpeniFLYTEK 服务未就绪', error.message);
+    app.quit();
+    return;
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
@@ -228,9 +230,6 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
-  if (serverProcess) {
-    serverProcess.kill();
-  }
   if (process.platform !== 'darwin') {
     app.quit();
   }

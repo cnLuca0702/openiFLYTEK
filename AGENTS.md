@@ -112,3 +112,18 @@
 - 应用名 OpeniFLYTEK，版本 1.2.0；应用 ICNS、Dock PNG 与当前新版黑框录音机素材一致，名称和版本字段通过自动校验。
 - DMG：`OpeniFLYTEK-1.2.0-arm64.dmg`，214928469 字节；SHA256 `455a0bc1a0d3a4c5f4dd824379fe811b7de499cc3ba6aa0defa0175e970de167`。
 - Mac 交付目录：`~/Downloads/OpeniFLYTEK-1.2.0-6Qq1ia/`。未替换当前安装；ad-hoc 签名验证通过，未 Apple 公证。
+
+## 知识全景 HTML 404 与旧后端误复用修复（2026-10-16）
+
+- Mac 实测 3800 的独立 Node 服务来自 `~/Desktop/WorkSpace/viaim-notebook-assistant`，对 `/api/memory/panorama` 返回 HTML 404。桌面端此前仅检查端口占用便复用，造成新界面连接旧服务。
+- 新增 `/api/health` 应用身份、版本、能力握手；Electron 仅复用匹配后端，自启服务等待就绪，冲突时提示退出旧应用/独立服务，不自动终止外部进程。macOS 仅关窗口不再终止后端，退出应用才清理自建子进程。
+- 未知 API 返回 JSON 404；记忆请求遇到 HTML 时显示版本/服务排查提示，不再暴露 JSON 解析异常。
+- 109 项测试与前端构建通过；新增旧 HTML、错误版本、缺失能力、延迟启动、启动失败/超时测试。此修复尚未重新打包，已交付的 1.2.0 DMG 不含此启动防护。
+
+## 1.2.1 后端启动修复发布（2026-10-16）
+
+- Apple Silicon Mac 上 109 项测试、前端构建、包内运行检查、DMG 完整性校验及只读挂载复核全部通过；包内健康握手确认应用身份、版本和知识全景能力。
+- 应用名为 OpeniFLYTEK，版本字段及包内 package.json 均为 1.2.1；应用 ICNS、Dock PNG 与仓库新版图标逐字节一致。
+- 产物 `OpeniFLYTEK-1.2.1-arm64.dmg`，216486532 字节；SHA256 `e9bb3a947d2cceb577aef3d6404b4edb72a291bfae95dd425858e87e6c6da416`。
+- Mac 交付目录 `~/Downloads/OpeniFLYTEK-1.2.1-YF9lK0/`。未覆盖用户安装或停止现有后端。旧后端占用 3800 时新版本明确提示退出旧服务，不自动杀进程。
+- ad-hoc 签名验证通过，未 Apple 公证；真实 Mac GUI/录音、云端与模型质量未在本次隔离包内验收中验证。

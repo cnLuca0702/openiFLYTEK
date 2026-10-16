@@ -45,6 +45,14 @@ test('HTTP: 会议/文档/办公本接口的只读保护、校验与错误路径
     await new Promise((r) => setTimeout(r, 100));
   }
   assert.ok(ready, `后端未就绪:\n${log}`);
+  const health = await (await fetch(`${base}/api/health`)).json();
+  assert.equal(health.app, 'OpeniFLYTEK');
+  assert.equal(health.version, JSON.parse(fs.readFileSync('package.json', 'utf8')).version);
+  assert.ok(health.capabilities.includes('memory-panorama'));
+  const missingApi = await fetch(`${base}/api/unknown-route`);
+  assert.equal(missingApi.status, 404);
+  assert.equal((await missingApi.json()).code, 'API_NOT_FOUND');
+
 
   const json = async (method, url, body) => {
     const response = await fetch(base + url, {

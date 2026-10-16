@@ -112,7 +112,7 @@ export interface MemoryPanorama {
   totals:{sources:number;documents:number;meetings:number;facts:number;knowledgeUnits:number};
 }
 export interface MemoryInsights {pending:number;citations:MemoryCitation[];followups:Array<{id:string;type:string;scope:string;project:string;item:string;status:string;owners:string[];dueDate:string|null;overdue:boolean;history:Array<{id:string;chunkId:number;quote:string;observedAt:string}>}>;changes:Array<{scope:string;project:string;aspect:string;status:string;history:Array<{id:string;chunkId:number;quote:string}>}>}
-async function memoryRequest<T>(url:string,options?:RequestInit):Promise<T> {const res=await fetch(`${BASE_URL}${url}`,options);const data=await res.json();if(!res.ok||data.code!=='000000')throw new Error(data.desc||'记忆请求失败');return data.data;}
+async function memoryRequest<T>(url:string,options?:RequestInit):Promise<T> {const res=await fetch(`${BASE_URL}${url}`,options);let data;try{data=await res.json();}catch{throw new Error('服务返回了非 JSON 响应，可能连接到了旧版后端。请保存录音，退出旧版应用或停止单独运行的后端服务，再重新打开应用。');}if(!res.ok||data.code!=='000000')throw new Error(data.desc||'记忆请求失败');return data.data;}
 export const api = {
   memoryPanorama: () => memoryRequest<MemoryPanorama>('/memory/panorama'),
   documents: () => memoryRequest<DocumentInfo[]>('/documents'),

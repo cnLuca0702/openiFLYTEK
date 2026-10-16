@@ -37,6 +37,8 @@ const assert = require('node:assert/strict');
       await new Promise(resolve=>setTimeout(resolve,100));
     }
     assert.ok(ready,`Packaged backend did not start: ${logs}`);
+    const {checkBackend} = require(path.join(resources, 'electron/backend-health.cjs'));
+    assert.equal(await checkBackend(port, release.version), true, 'Packaged backend handshake');
     const response=await fetch(`http://127.0.0.1:${port}/api/documents?name=smoke.txt`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:'打包运行验证资料'});
     assert.equal(response.status,200);
     const document=(await response.json()).data;

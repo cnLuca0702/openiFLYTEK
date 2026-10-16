@@ -28,7 +28,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const port = process.env.PORT || 3800;
 
+const appVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')).version;
 app.use(cors());
+app.get('/api/health', (_req, res) => res.json({app:'OpeniFLYTEK', version:appVersion, capabilities:['memory-panorama']}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -1023,6 +1025,8 @@ app.get('/api/devices/status', async (req, res) => {
     }
   });
 });
+
+app.use('/api', (_req, res) => res.status(404).json({code:'API_NOT_FOUND', desc:'当前后端不支持此接口，请确认应用与后端版本一致。'}));
 
 // ======================== WebSocket 流式转写 ========================
 

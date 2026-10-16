@@ -64,6 +64,8 @@ try {
   empty=true;
   await page.locator('aside').getByRole('button',{name:'记忆与资料',exact:true}).click();
   await work.getByText('知识正在这里积累',{exact:true}).waitFor();
+  await page.route('**/api/memory/panorama', route => route.fulfill({status:404,contentType:'text/html',body:'<!DOCTYPE html><pre>Cannot GET /api/memory/panorama</pre>'}));
+  await work.getByText(/服务返回了非 JSON 响应/).waitFor({timeout:15000});
   assert.deepEqual(errors,[]);
   console.log('UI smoke passed: panorama, topic filtering, inline knowledge/source pages, race protection, deletion, meeting navigation, empty state; no modal or browser errors.');
 } finally {await browser.close();}
