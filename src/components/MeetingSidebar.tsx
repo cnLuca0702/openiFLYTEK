@@ -15,9 +15,12 @@ import {
   Settings,
   Plus,
   Radio,
-  NotebookPen
+  NotebookPen,
+  Brain
 } from 'lucide-react';
 import { Meeting, DevicesStatusResponse } from '../types';
+import { MemoryCitation } from '../services/api';
+import { MemorySidebar } from './MemorySidebar';
 import { useConfirm } from '../hooks/useConfirm';
 
 interface MeetingSidebarProps {
@@ -33,6 +36,8 @@ interface MeetingSidebarProps {
   onOpenSettings: () => void;
   isRecording: boolean;
   onToggleRecord: () => void;
+  onOpenDocument: (docId: string) => void;
+  onOpenMemory: (citation: MemoryCitation) => Promise<void>;
 }
 
 export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
@@ -47,10 +52,13 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
   onOpenNotebookHub,
   onOpenSettings,
   isRecording,
-  onToggleRecord
+  onToggleRecord,
+  onOpenDocument,
+  onOpenMemory
 }) => {
   const headset = deviceStatus?.viaimHeadset;
   const notebook = deviceStatus?.officeNotebook;
+  const [sidebarTab, setSidebarTab] = useState<'recordings' | 'memory'>('recordings');
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'todos' | 'synced'>('all');
   const confirm = useConfirm();
@@ -83,6 +91,34 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
 
   return (
     <aside className="w-80 h-full border-r border-viaim-border bg-viaim-card/80 backdrop-blur-md flex flex-col shrink-0 select-none">
+      {/* 侧栏双标签：录音与笔记 / 记忆与资料 */}
+      <div className="shrink-0 flex gap-1 p-1.5 border-b border-viaim-border bg-viaim-bg/40 text-xs">
+        <button
+          onClick={() => setSidebarTab('recordings')}
+          className={`flex-1 py-1.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+            sidebarTab === 'recordings'
+              ? 'bg-viaim-primary/20 text-indigo-300 border border-viaim-primary/40'
+              : 'text-viaim-textDim hover:text-viaim-textMain border border-transparent'
+          }`}
+        >
+          <Radio className="w-3.5 h-3.5" />
+          <span>录音与笔记</span>
+        </button>
+        <button
+          onClick={() => setSidebarTab('memory')}
+          className={`flex-1 py-1.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+            sidebarTab === 'memory'
+              ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
+              : 'text-viaim-textDim hover:text-viaim-textMain border border-transparent'
+          }`}
+        >
+          <Brain className="w-3.5 h-3.5" />
+          <span>记忆与资料</span>
+        </button>
+      </div>
+
+      {sidebarTab === 'recordings' ? (
+        <>
       {/* 顶部：新建会议录制（主操作） + 搜索与分类导航 */}
       <div className="p-3.5 border-b border-viaim-border">
         {/* 主操作：会议录制 */}
@@ -336,6 +372,10 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
           <Settings className="w-4 h-4" />
         </button>
       </div>
+        </>
+      ) : (
+        <MemorySidebar onOpenDocument={onOpenDocument} onOpenMemory={onOpenMemory} />
+      )}
     </aside>
   );
 };

@@ -559,6 +559,11 @@ export const App: React.FC = () => {
     setMemoryOpen(false);setSelectedMeetingId(detail.id);setSelectedMeeting(detail);
     setMemorySeek({meetingId:detail.id,startMs:evidence.startMs,request:Date.now()});
   };
+  // 左栏「记忆与资料」标签：打开某份资料的解读详情（复用 MemoryHub 弹窗）
+  const openDocument = (docId: string) => {
+    setMemorySource({ sourceType: 'document', meetingId: docId } as MemoryCitation);
+    setMemoryOpen(true);
+  };
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-viaim-bg text-viaim-textMain select-none">
       {/* 顶部主导航栏（符合 Mac 沉浸式风格与原生交通灯对齐） */}
@@ -581,6 +586,8 @@ export const App: React.FC = () => {
           onOpenSettings={() => setIsSettingsOpen(true)}
           isRecording={isRecording}
           onToggleRecord={handleToggleRecord}
+          onOpenDocument={openDocument}
+          onOpenMemory={openMemorySource}
         />
 
         {/* 中栏：转写编辑器与音频工作台 (弹性伸缩) */}
