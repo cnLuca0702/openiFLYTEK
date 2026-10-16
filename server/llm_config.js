@@ -105,6 +105,7 @@ export function getPublicConfig() {
     provider: cfg.provider || '',
     autoSummary: cfg.autoSummary !== false,
     providers,
+    embedding: {enabled: cfg.embedding?.enabled === true, baseUrl: cfg.embedding?.baseUrl || '', model: cfg.embedding?.model || '', apiKeySet: !!cfg.embedding?.apiKey},
     asr: normalizeAsrConfig(cfg.asr),
     chatgpt: cfg.chatgpt
       ? { loggedIn: true, email: cfg.chatgpt.email || '', accountId: cfg.chatgpt.accountId || '' }
@@ -123,4 +124,17 @@ export function resolveProviderRuntime(providerId) {
   const id = providerId || cfg.provider;
   const stored = cfg.providers[id] || {};
   return { id, ...stored, chatgpt: id === 'chatgpt' ? cfg.chatgpt : null };
+}
+
+export function updateEmbeddingConfig(patch) {
+  const previous = loadConfig().embedding || {};
+  const next = {...previous};
+  if (patch.enabled !== undefined) next.enabled = patch.enabled === true;
+  for (const key of ['baseUrl','model','apiKey']) if (patch[key] !== undefined) next[key] = String(patch[key] || '').trim();
+  if (next.baseUrl) {
+    const url = new URL(next.baseUrl);
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new Error('向量服务地址须为 HTTP(S)，不能包含凭据或查询参数');
+  }
+  if (next.enabled && (!next.baseUrl || !next.model)) throw new Error('请填写向量服务地址和模型名称');
+  return saveConfig({embedding:next});
 }

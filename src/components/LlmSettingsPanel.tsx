@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Cpu,
 } from 'lucide-react';
+import { EmbeddingSettings } from './EmbeddingSettings';
 import { api } from '../services/api';
 import { useToast } from '../hooks/useToast';
 import { LlmProviderMeta, LlmPublicConfig, ChatGptLoginStatus } from '../types';
@@ -312,6 +313,7 @@ export const LlmSettingsPanel: React.FC<LlmSettingsPanelProps> = ({ onConfigChan
         <span>大模型 LLM 设置（用户自配置）</span>
       </h3>
 
+      <EmbeddingSettings />
       {/* 服务商选择 */}
       <div className="grid grid-cols-3 gap-1.5">
         {providers.map((p) => {

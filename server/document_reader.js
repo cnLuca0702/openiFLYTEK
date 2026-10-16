@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { createCanvas, loadImage } from '@napi-rs/canvas';
 import mammoth from 'mammoth';
+import { splitStructured, officeHtmlText } from './document_structure.js';
 import ExcelJS from 'exceljs';
 import { parse } from 'csv-parse/sync';
 const exec = promisify(execFile);
@@ -79,7 +80,7 @@ export async function readDocument(file, ext, dir) {
         const canvas=createCanvas(Math.ceil(viewport.width),Math.ceil(viewport.height));
         await page.render({canvasContext:canvas.getContext('2d'),viewport,canvas}).promise;
         const image=`page-${i}.png`; await fs.writeFile(path.join(dir,image),canvas.toBuffer('image/png'),{mode:0o600});
-        const text=(await page.getTextContent()).items.map(x=>x.str||'').join(' ');
+        const text=(await page.getTextContent()).items.map(x=>(x.str||'')+(x.hasEOL?'\n':' ')).join('');
         pages.push({number:i,label:`${['ppt','pptx'].includes(ext)?'幻灯片':'第'} ${i} 页`,text,image,notes:notes.get(slideOrder[i-1]||i)||''}); page.cleanup();
       }
       return check(pages);
@@ -99,7 +100,7 @@ export async function readDocument(file, ext, dir) {
     else { const workbook=new ExcelJS.Workbook(); await workbook.xlsx.readFile(file); workbook.eachSheet(sheet=> {const rows=[];sheet.eachRow({includeEmpty:true},row=>rows.push(row.values.slice(1).map(v=>typeof v==='object'?JSON.stringify(v):v)));add(sheet.name,rows);}); }
     return check(pages);
   }
-  const text=ext==='docx'?(await mammoth.extractRawText({path:file})).value:new TextDecoder('utf-8',{fatal:true}).decode(await fs.readFile(file));
-  const parts=text.trim().match(/[\s\S]{1,4000}/g)||[];
-  return check(parts.map((text,i)=>({number:i+1,label:`段落组 ${i+1}`,text})));
+  const text=ext==='docx'?officeHtmlText((await mammoth.convertToHtml({path:file}, {externalFileAccess:false})).value):new TextDecoder('utf-8',{fatal:true}).decode(await fs.readFile(file));
+  const parts=splitStructured(text,4000);
+  return check(parts.map((text,i)=>({number:i+1,label:`段落组 ${i+1}${/^#{1,6} (.+)/.exec(text)?.[1] ? ' · '+/^#{1,6} (.+)/.exec(text)[1] : ''}`,text})));
 }

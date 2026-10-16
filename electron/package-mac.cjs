@@ -10,6 +10,8 @@ const iconSrc = path.join(__dirname, 'resources/icon.icns');
 
 console.log('[Mac Packager] Building native macOS Application Bundle...');
 
+if (!fs.existsSync(iconSrc)) throw new Error('Missing release icon: '+iconSrc);
+
 if (!fs.existsSync(electronDistApp)) {
   console.error('[Mac Packager] Electron.app template not found in node_modules/electron/dist');
   process.exit(1);
@@ -64,6 +66,11 @@ if (fs.existsSync(plistPath)) {
   plist = plist.replace(/<key>CFBundleExecutable<\/key>\s*<string>[^<]+<\/string>/, '<key>CFBundleExecutable</key>\n\t<string>OpeniFLYTEK</string>');
   plist = plist.replace(/<key>CFBundleIdentifier<\/key>\s*<string>[^<]+<\/string>/, '<key>CFBundleIdentifier</key>\n\t<string>com.openiflytek.app</string>');
   
+  for (const [key,value] of Object.entries({CFBundleName:'OpeniFLYTEK',CFBundleDisplayName:'OpeniFLYTEK',CFBundleIconFile:'icon.icns'})) {
+    const pattern=new RegExp(`<key>${key}</key>\\s*<string>[^<]*</string>`);
+    const entry=`<key>${key}</key>\n\t<string>${value}</string>`;
+    plist=pattern.test(plist)?plist.replace(pattern,entry):plist.replace('</dict>',entry+'\n</dict>');
+  }
   const version = require('../package.json').version;
   for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
     plist = plist.replace(new RegExp(`<key>${key}</key>\\s*<string>[^<]+</string>`), `<key>${key}</key>\n\t<string>${version}</string>`);

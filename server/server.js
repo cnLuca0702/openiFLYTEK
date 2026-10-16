@@ -14,7 +14,7 @@ import { streamLocalMedia } from './media_stream.js';
 import { createMemoryService } from './memory_service.js';
 import { LegacyMigrationService } from './legacy_migration_service.js';
 import { publicProviders } from './llm_providers.js';
-import { getPublicConfig, updateProviderConfig, saveConfig } from './llm_config.js';
+import { getPublicConfig, updateProviderConfig, saveConfig, updateEmbeddingConfig } from './llm_config.js';
 import { startChatGptLogin, getChatGptLoginStatus, logoutChatGpt } from './chatgpt_oauth.js';
 import { testProvider, listModels } from './llm_client.js';
 import { generateMeetingSummary, buildTranscript } from './summary_service.js';
@@ -97,7 +97,7 @@ app.get('/api/memory/insights', async (req,res) => {
   try {await memory?.sync();res.json({code:'000000',data:memory?.insights(typeof req.query.meetingId==='string'?req.query.meetingId:undefined)||{followups:[],changes:[],citations:[],pending:0}});} catch (_) {res.status(503).json({desc:'自动跟进暂不可用'});}
 });
 app.get('/api/memory/status', (_req, res) => {
-  res.json({ code: '000000', data: memory ? { available: memory.available, ...memory.store.status() } : { available: false } });
+  res.json({ code: '000000', data: memory ? { available: memory.available, ...memory.store.status(), semantic: memory.embeddings.status() } : { available: false } });
 });
 app.get('/api/memory/related/:id', async (req, res) => {
   try {
@@ -384,7 +384,8 @@ app.get('/api/llm/config', (req, res) => {
 // 7.3 更新配置（provider / autoSummary / 各服务商字段）
 app.put('/api/llm/config', (req, res) => {
   try {
-    const { provider, autoSummary, providerConfig, providerId, asr } = req.body || {};
+    const { provider, autoSummary, providerConfig, providerId, asr, embedding } = req.body || {};
+    if (embedding !== undefined) updateEmbeddingConfig(embedding);
     if (provider !== undefined || autoSummary !== undefined || asr !== undefined) {
       saveConfig({
         ...(provider !== undefined ? { provider } : {}),

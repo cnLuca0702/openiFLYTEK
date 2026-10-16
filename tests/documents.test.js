@@ -138,3 +138,49 @@ test('unknown and future dates never complete a task prematurely',()=>{
  const a=fact('1','2026-10-10');const future=fact('2','2027-01-01','completed','甲公司晨星项目接口测试已完成。');
  assert.equal(buildFollowups([a,future],Date.parse('2026-10-15'))[0].status,'uncertain');
 });
+
+test('旧版文字资料自动暂存升级，失败保留旧页与索引，成功原子切换',async t=>{
+  const {docs,store,memory}=setup(t);
+  const doc=docs.upload('legacy.md',Buffer.from('原始文档'));
+  await docs.tick();await docs.tick();await docs.tick();
+  const old=store.search('晨星')[0];const oldPages=docs.detail(doc.id).pages;
+  docs.db.prepare('UPDATE documents SET parser_version=1 WHERE id=?').run(doc.id);
+  docs.read=async()=>[{number:1,label:'第一章',text:'# 新结构\n\n保留完整章节和表格。'}];
+  await docs.tick();
+  assert.deepEqual(docs.detail(doc.id).pages,oldPages);assert.ok(memory.evidence(old.chunkId,old.version));
+  const ask=docs.ask;docs.ask=async()=>{throw Error('offline');};await docs.tick();
+  assert.equal(docs.row(doc.id).status,'ready');assert.ok(store.evidence(old.chunkId));
+  docs.db.prepare('UPDATE document_upgrades SET retry_at=0 WHERE id=?').run(doc.id);docs.ask=ask;
+  const resumed=new DocumentService({memory,root:docs.root,read:()=>{throw Error('must resume');},ask});
+  await resumed.tick();await resumed.tick();
+  assert.equal(resumed.row(doc.id).parser_version,2);
+  assert.match(resumed.detail(doc.id).pages[0].text,/新结构/);
+  assert.equal(memory.evidence(old.chunkId,old.version),null);
+  assert.equal(store.search('完整章节')[0].meetingId,doc.id);
+  assert.ok(fs.existsSync(resumed.file(doc.id,'knowledge')));
+});
+
+test('文档升级中删除不会重新发布，事务失败保留旧索引',async t=>{
+  const {docs,store}=setup(t);
+  const doc=docs.upload('legacy.md',Buffer.from('待升级'));
+  await docs.tick();await docs.tick();await docs.tick();
+  docs.db.prepare('UPDATE documents SET parser_version=1 WHERE id=?').run(doc.id);
+  docs.read=async()=>[{number:1,label:'新段',text:'新结构资料'}];
+  await docs.tick();await docs.tick();
+  const old=store.search('晨星')[0];const upsert=store.upsert.bind(store);
+  store.upsert=()=>{throw Error('simulated disk failure');};await docs.tick();store.upsert=upsert;
+  assert.equal(docs.row(doc.id).parser_version,1);assert.ok(store.evidence(old.chunkId));
+  docs.remove(doc.id);await docs.tick();assert.equal(docs.row(doc.id).status,'deleted');assert.equal(store.status().sources,0);
+});
+
+test('实际 DOCX 解析保留标题与表格列关系，Markdown 保留章节边界',async t=>{
+  const {dir}=setup(t),zip=new JSZip();
+  zip.file('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('_rels/.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file('word/document.xml','<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>设备方案</w:t></w:r></w:p><w:tbl><w:tr><w:tc><w:p><w:r><w:t>型号</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>数量</w:t></w:r></w:p></w:tc></w:tr><w:tr><w:tc><w:p><w:r><w:t>ZX99</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>3</w:t></w:r></w:p></w:tc></w:tr></w:tbl></w:body></w:document>');
+  const file=path.join(dir,'structured.docx');fs.writeFileSync(file,await zip.generateAsync({type:'nodebuffer'}));
+  const pages=await readDocument(file,'docx',dir);const text=pages.map(p=>p.text).join('\n');
+  assert.match(text,/# 设备方案/);assert.match(text,/\| ZX99 \| 3 \|/);assert.match(text,/\| 型号 \| 数量 \|/);
+  const md=path.join(dir,'structured.md');fs.writeFileSync(md,'# 第一章\n\n设备要求\n\n# 第二章\n\n接口要求');
+  const sections=await readDocument(md,'md',dir);assert.equal(sections.length,2);assert.match(sections[1].label,/第二章/);
+});

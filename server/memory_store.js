@@ -1,4 +1,6 @@
 // Automatic memory is a projection of source meetings, never a replacement for them.
+import { evidenceEntities, relatedEvidence } from './memory_relations.js';
+import { splitStructured } from './document_structure.js';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash } from 'node:crypto';
 import { validateFollowup, buildFollowups } from './memory_followups.js';
@@ -23,7 +25,7 @@ export function snapshot(meeting) {
     startMs: Math.max(0, Number(s.startTimeMs) || 0), endMs: Math.max(0, Number(s.endTimeMs) || Number(s.startTimeMs) || 0),
   })).filter((s) => s.text && !/📌|重点标记点/.test(s.text));
   const data = { id: String(meeting.id), title: String(meeting.title || '未命名会议'), createdAt: String(meeting.createdAt || ''), sentences };
-  return { ...data, version: hash(data) };
+  return { ...data, version: hash(data.id.startsWith('document:') ? {...data, chunker: 2} : data) };
 }
 
 export function chunksOf(data) {
@@ -38,8 +40,14 @@ export function chunksOf(data) {
   for (const sentence of data.sentences) {
     if (data.id.startsWith('document:')) flush();
     // Split pathological long ASR sentences without dropping their source identity.
-    for (let offset = 0; offset < sentence.text.length; offset += 1100) {
-      const s = { ...sentence, text: sentence.text.slice(offset, offset + 1100) };
+    const parts = data.id.startsWith('document:') ? splitStructured(sentence.text) : sentence.text.match(/[\s\S]{1,1100}/g) || [];
+    let heading='';
+    for (const text of parts) {
+      const headingLines=[...text.matchAll(/^#{1,6} .+$/gm)];
+      const context=data.id.startsWith('document:') && heading && !/^#{1,6} /.test(text) ? heading+'\n' : '';
+      if(headingLines.length)heading=headingLines.at(-1)[0];
+      const s = { ...sentence, text:context+text };
+      if (data.id.startsWith('document:')) flush();
       if (size + s.text.length > 1200) flush();
       group.push(s); size += s.text.length;
     }
@@ -60,6 +68,8 @@ export class MemoryStore {
         text TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, sentence_ids TEXT NOT NULL,
         UNIQUE(source_id, version, ordinal));
       CREATE VIRTUAL TABLE IF NOT EXISTS memory_fts USING fts5(terms);
+      CREATE TABLE IF NOT EXISTS memory_entity_links (chunk_id INTEGER NOT NULL, fact_id TEXT NOT NULL, entity_key TEXT NOT NULL, PRIMARY KEY(chunk_id,fact_id,entity_key));
+      CREATE INDEX IF NOT EXISTS memory_entity_key ON memory_entity_links(entity_key);
       CREATE TABLE IF NOT EXISTS memory_keywords(chunk_id INTEGER PRIMARY KEY, text TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS memory_jobs (
         source_id TEXT NOT NULL, version TEXT NOT NULL, batch INTEGER NOT NULL, state TEXT NOT NULL DEFAULT 'pending',
@@ -78,9 +88,9 @@ export class MemoryStore {
     if (!this.db.prepare('PRAGMA table_info(memory_facts)').all().some(c => c.name === 'followup_json')) this.db.exec("ALTER TABLE memory_facts ADD COLUMN followup_json TEXT NOT NULL DEFAULT 'null'");
     // One-time upgrade: old facts remain usable as raw evidence while v2 jobs backfill.
     this.transaction(() => {
-      if (this.db.prepare("SELECT value FROM memory_meta WHERE key='extractor_version'").get()?.value !== '3') {
+      if (this.db.prepare("SELECT value FROM memory_meta WHERE key='extractor_version'").get()?.value !== '4') {
         this.db.exec("UPDATE memory_jobs SET state='pending',attempts=0,retry_at=0");
-        this.db.prepare("INSERT OR REPLACE INTO memory_meta VALUES('extractor_version','3')").run();
+        this.db.prepare("INSERT OR REPLACE INTO memory_meta VALUES('extractor_version','4')").run();
       }
       this.db.prepare("UPDATE memory_jobs SET state='pending' WHERE state='running'").run();
     });
@@ -102,9 +112,12 @@ export class MemoryStore {
     });
   }
   transaction(fn) {
+    if(this.inTransaction)return fn();
     this.db.exec('BEGIN IMMEDIATE');
+    this.inTransaction=true;
     try { const result = fn(); this.db.exec('COMMIT'); return result; }
     catch (error) { this.db.exec('ROLLBACK'); throw error; }
+    finally { this.inTransaction=false; }
   }
   upsert(meeting) {
     const data = snapshot(meeting);
@@ -121,6 +134,11 @@ export class MemoryStore {
         this.db.prepare(`INSERT OR IGNORE INTO memory_chunks(source_id,version,ordinal,text,start_ms,end_ms,sentence_ids) VALUES(?,?,?,?,?,?,?)`)
           .run(data.id, data.version, chunk.ordinal, chunk.text, chunk.startMs, chunk.endMs, JSON.stringify(chunk.sentenceIds));
         const row = this.db.prepare('SELECT id FROM memory_chunks WHERE source_id=? AND version=? AND ordinal=?').get(data.id, data.version, chunk.ordinal);
+        if (meeting.knowledge) {
+          const pages = new Set(chunk.sentenceIds.map(id => Number(id.split(':')[1])));
+          const keywords = meeting.knowledge.flatMap(g => g.units).filter(u => u.pages.some(n => pages.has(n))).map(u => u.question+' '+u.answer).join(' ');
+          this.db.prepare('INSERT OR REPLACE INTO memory_keywords VALUES(?,?)').run(row.id,keywords);
+        }
         this.indexChunk(row.id, data.title, chunk.text);
       }
       for (let batch = 0; batch < Math.ceil(chunks.length / 6); batch++) {
@@ -153,6 +171,7 @@ export class MemoryStore {
     }
     return [...diverse, ...rest].slice(0, limit).map((r) => this.citation(r));
   }
+  related(seeds, options) { return relatedEvidence(this,seeds,options); }
   contextFor(meetingIds, limit = 12) {
     const groups = meetingIds.map((id) => this.db.prepare(`SELECT c.*,s.title,s.occurred_at FROM memory_chunks c
       JOIN memory_sources s ON s.id=c.source_id WHERE s.id=? AND s.active=1 AND c.version=s.version ORDER BY c.ordinal`).all(id));
@@ -191,7 +210,10 @@ export class MemoryStore {
         const knownAt = new Map(this.db.prepare('SELECT id,created_at FROM memory_facts WHERE source_id=? AND version=?')
           .all(job.source_id, job.version).map((f) => [f.id, f.created_at]));
         // Replace only this successfully re-extracted batch, atomically. Old jobs cannot resurrect evidence.
-        for (const chunk of job.chunks) this.db.prepare('DELETE FROM memory_facts WHERE chunk_id=?').run(chunk.id);
+        for (const chunk of job.chunks) {
+          this.db.prepare('DELETE FROM memory_entity_links WHERE chunk_id=?').run(chunk.id);
+          this.db.prepare('DELETE FROM memory_facts WHERE chunk_id=?').run(chunk.id);
+        }
         for (const fact of facts.slice(0, 24)) {
           const chunk = job.chunks.find((c) => c.id === Number(fact.chunkId));
           if (!chunk || !['decision', 'commitment', 'task', 'fact', 'proposal', 'change', 'question', 'resolution'].includes(fact.kind)) continue;
@@ -201,6 +223,7 @@ export class MemoryStore {
           this.db.prepare('INSERT OR IGNORE INTO memory_facts(id,source_id,version,chunk_id,kind,subject,claim,quote,created_at,structure_json,followup_json) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(
             id, job.source_id, job.version, chunk.id,
             fact.kind, subject, claim, quote, knownAt.get(id) || Date.now(), JSON.stringify(validateStructure(fact, chunk, job.occurred_at)), JSON.stringify(validateFollowup(fact)));
+          for (const entity of evidenceEntities({...fact,quote})) this.db.prepare('INSERT OR IGNORE INTO memory_entity_links VALUES(?,?,?)').run(chunk.id,id,entity.key);
         }
         for (const chunk of job.chunks) this.indexChunk(chunk.id, job.title, chunk.text);
       }

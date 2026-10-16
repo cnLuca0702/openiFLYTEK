@@ -114,6 +114,7 @@ export const api = {
   deleteDocument: (id:string) => memoryRequest<boolean>(`/documents/${encodeURIComponent(id)}`,{method:'DELETE'}),
   retryDocument: (id:string) => memoryRequest<boolean>(`/documents/${encodeURIComponent(id)}/retry`,{method:'POST'}),
   documentFile: (id:string,kind:string,page?:number) => `${BASE_URL}/documents/${encodeURIComponent(id)}/file/${kind}${page?`?page=${page}`:''}`,
+  memoryStatus: () => memoryRequest<{semantic?:{state:string;indexed:number;pending:number}}>('/memory/status'),
   memoryInsights: (meetingId?:string) => memoryRequest<MemoryInsights>(`/memory/insights${meetingId?`?meetingId=${encodeURIComponent(meetingId)}`:''}`),
   // 获取用户真实个人资料（从 setting.ini 读取）
   async getUserProfile(): Promise<UserProfile> {
@@ -232,6 +233,7 @@ export const api = {
 
   // 保存配置：provider=默认服务商 / autoSummary=自动提炼 / providerConfig=某服务商字段 / asr=语音转写设置
   async saveLlmConfig(payload: {
+    embedding?: {enabled?:boolean; baseUrl?:string; model?:string; apiKey?:string};
     provider?: string;
     autoSummary?: boolean;
     providerId?: string;

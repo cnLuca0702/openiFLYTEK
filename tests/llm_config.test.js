@@ -125,3 +125,13 @@ test('服务商注册表可公开导出且不含任何密钥字段', () => {
   const serialized = JSON.stringify(publicProviders());
   assert.ok(!serialized.includes('apiKey'), '注册表不应包含密钥字段');
 });
+test('向量配置独立保存、密钥不下发且留空字段保持原值',async()=>{
+  const {updateEmbeddingConfig}=await import('../server/llm_config.js');
+  updateEmbeddingConfig({enabled:true,baseUrl:'http://localhost:11434/v1',model:'embedding-model',apiKey:'embedding-secret'});
+  assert.equal(getPublicConfig().embedding.apiKeySet,true);
+  assert.ok(!JSON.stringify(getPublicConfig()).includes('embedding-secret'));
+  updateEmbeddingConfig({model:'new-model'});assert.equal(loadConfig().embedding.apiKey,'embedding-secret');
+  assert.throws(()=>updateEmbeddingConfig({baseUrl:'https://user:password@example.com/v1'}));
+  assert.equal(loadConfig().embedding.model,'new-model');
+  updateEmbeddingConfig({apiKey:''});assert.equal(getPublicConfig().embedding.apiKeySet,false);
+});

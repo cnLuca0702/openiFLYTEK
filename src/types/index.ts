@@ -76,6 +76,7 @@ export interface AsrStatus {
 }
 
 export interface LlmPublicConfig {
+  embedding?: {enabled:boolean; baseUrl:string; model:string; apiKeySet:boolean};
   provider: string;
   autoSummary: boolean;
   providers: Record<string, LlmProviderConfigView>;

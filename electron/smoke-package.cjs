@@ -10,6 +10,16 @@ const assert = require('node:assert/strict');
   const bundle = path.resolve(process.argv[2] || path.join(__dirname, '../dist_mac/OpeniFLYTEK.app'));
   const runtime = path.join(bundle, 'Contents/MacOS/OpeniFLYTEK');
   const resources = path.join(bundle, 'Contents/Resources/app');
+  const metadata=JSON.parse(execFileSync('plutil',['-convert','json','-o','-',path.join(bundle,'Contents/Info.plist')],{encoding:'utf8'}));
+  const release=require('../package.json');
+  for(const field of ['CFBundleName','CFBundleDisplayName','CFBundleExecutable'])assert.equal(metadata[field],release.productName);
+  for(const field of ['CFBundleVersion','CFBundleShortVersionString'])assert.equal(metadata[field],release.version);
+  assert.equal(metadata.CFBundleIdentifier,'com.openiflytek.app');
+  assert.equal(metadata.CFBundleIconFile,'icon.icns');
+  assert.deepEqual(fs.readFileSync(path.join(bundle,'Contents/Resources/icon.icns')),fs.readFileSync(path.join(__dirname,'resources/icon.icns')));
+  assert.deepEqual(fs.readFileSync(path.join(resources,'electron/resources/icon.png')),fs.readFileSync(path.join(__dirname,'resources/icon.png')));
+  assert.equal(JSON.parse(fs.readFileSync(path.join(resources,'package.json'))).version,release.version);
+  console.log('Application name, version and current release icons: OK');
   assert.ok(!fs.lstatSync(path.join(resources, 'node_modules')).isSymbolicLink(), 'Dependencies must be bundled');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openiflytek-smoke-'));
   const env = {...process.env, HOME:home, ELECTRON_RUN_AS_NODE:'1', VIAIM_MEMORY_SKIP_OFFICIAL:'1', VIAIM_DB_PATH:path.join(home,'missing-official.db')};
@@ -23,7 +33,7 @@ const assert = require('node:assert/strict');
     let ready=false;
     for(let i=0;i<100;i++) {
       if(child.exitCode!==null)throw new Error(`Packaged backend exited: ${logs}`);
-      try {const res=await fetch(`http://127.0.0.1:${port}/api/memory/status`);if(res.ok){assert.equal((await res.json()).data.available,true);ready=true;break;}}catch (_){}
+      try {const res=await fetch(`http://127.0.0.1:${port}/api/memory/status`);if(res.ok){const status=(await res.json()).data;assert.equal(status.available,true);assert.equal(status.semantic.state,'unconfigured');ready=true;break;}}catch (_){}
       await new Promise(resolve=>setTimeout(resolve,100));
     }
     assert.ok(ready,`Packaged backend did not start: ${logs}`);

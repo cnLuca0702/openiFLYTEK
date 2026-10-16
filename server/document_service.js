@@ -17,7 +17,11 @@ export class DocumentService {
     this.db.exec(`CREATE TABLE IF NOT EXISTS documents (
       id TEXT PRIMARY KEY,name TEXT NOT NULL,ext TEXT NOT NULL,digest TEXT NOT NULL,uploaded_at TEXT NOT NULL,
       status TEXT NOT NULL,error TEXT NOT NULL DEFAULT '',attempts INTEGER NOT NULL DEFAULT 0,retry_at INTEGER NOT NULL DEFAULT 0,
-      pages_json TEXT NOT NULL DEFAULT '[]',knowledge_json TEXT NOT NULL DEFAULT '[]',material_date TEXT NOT NULL DEFAULT '',replaces TEXT NOT NULL DEFAULT '');`);
+      pages_json TEXT NOT NULL DEFAULT '[]',knowledge_json TEXT NOT NULL DEFAULT '[]',material_date TEXT NOT NULL DEFAULT '',replaces TEXT NOT NULL DEFAULT '',parser_version INTEGER NOT NULL DEFAULT 2);`);
+    if(!this.db.prepare('PRAGMA table_info(documents)').all().some(c=>c.name==='parser_version')) this.db.exec('ALTER TABLE documents ADD COLUMN parser_version INTEGER NOT NULL DEFAULT 1');
+    this.db.exec(`CREATE TABLE IF NOT EXISTS document_upgrades AS SELECT * FROM documents WHERE 0;
+      CREATE UNIQUE INDEX IF NOT EXISTS document_upgrade_id ON document_upgrades(id);
+      UPDATE documents SET parser_version=2 WHERE ext NOT IN ('docx','txt','md');`);
   }
   row(id) { return this.db.prepare('SELECT * FROM documents WHERE id=?').get(id); }
   dir(id) { if(!/^document:[a-f0-9]{64}$/.test(id)) throw new Error('无效文档标识');return path.join(this.root,id.slice(9)); }
@@ -39,11 +43,11 @@ export class DocumentService {
     }
     const dir=this.dir(id);fs.mkdirSync(dir,{recursive:true});
     fs.writeFileSync(path.join(dir,`original.${ext}`),bytes,{mode:0o600});
-    this.db.prepare(`INSERT INTO documents(id,name,ext,digest,uploaded_at,status,replaces) VALUES(?,?,?,?,?,'queued',?)
+    this.db.prepare(`INSERT INTO documents(id,name,ext,digest,uploaded_at,status,replaces,parser_version) VALUES(?,?,?,?,?,'queued',?,2)
       ON CONFLICT(id) DO UPDATE SET status='queued',error='',retry_at=0,attempts=0,replaces=excluded.replaces`).run(id,name,ext,digest,new Date().toISOString(),replaces);
     return this.public(this.row(id));
   }
-  remove(id) {if(!this.row(id))return;this.db.prepare("UPDATE documents SET status='deleted' WHERE id=?").run(id);this.memory.forget(id);}
+  remove(id) {if(!this.row(id))return;this.db.prepare("UPDATE documents SET status='deleted' WHERE id=?").run(id);this.db.prepare('DELETE FROM document_upgrades WHERE id=?').run(id);this.memory.forget(id);}
   retry(id) {this.db.prepare("UPDATE documents SET error='',retry_at=0 WHERE id=? AND status!='deleted'").run(id);}
   source(id) {
     const r=this.row(id);if(!r||r.status!=='ready')return null;
@@ -56,13 +60,16 @@ export class DocumentService {
       }
     } catch (_) {return null;}
     if(JSON.parse(r.pages_json).some(p=>p.image&&!fs.existsSync(path.join(this.dir(id),p.image))))return null;
-    return {id,title:r.name,createdAt:r.material_date,sourceType:'document',sentences:JSON.parse(r.pages_json).map(p=>({id:`page:${p.number}`,speaker:p.label,text:[p.text,p.ledger?`【页面视觉解读，需对照原页】\n${p.ledger.facts}\n图表关系：${p.ledger.charts}`:''].filter(Boolean).join('\n')}))};
+    return {id,title:r.name,createdAt:r.material_date,sourceType:'document',knowledge:JSON.parse(r.knowledge_json),sentences:JSON.parse(r.pages_json).map(p=>({id:`page:${p.number}`,speaker:p.label,text:[p.text,p.ledger?`【页面视觉解读，需对照原页】\n${p.ledger.facts}\n图表关系：${p.ledger.charts}`:''].filter(Boolean).join('\n')}))};
   }
   detail(id) {const r=this.row(id);if(!r||r.status==='deleted')return null;return {...this.public(r),pages:JSON.parse(r.pages_json).map(p=>({...p,image:!!p.image})),knowledge:JSON.parse(r.knowledge_json)};}
   file(id,kind,page) {
     const r=this.row(id);if(!r||r.status==='deleted')return null;
     if(kind==='original')return path.join(this.dir(id),`original.${r.ext}`);
-    if(kind==='knowledge'&&r.status==='ready')return path.join(this.dir(id),'knowledge.md');
+    if(kind==='knowledge'&&r.status==='ready') {
+      const versioned=path.join(this.dir(id),`knowledge-${hash(r.knowledge_json)}.md`);
+      return fs.existsSync(versioned)?versioned:path.join(this.dir(id),'knowledge.md');
+    }
     const p=JSON.parse(r.pages_json).find(p=>p.number===Number(page));
     return p?.image ? path.join(this.dir(id),p.image) : null;
   }
@@ -79,15 +86,28 @@ export class DocumentService {
   }
   alive(id) {return this.row(id)?.status!=='deleted';}
   async tick() {
-    if(this.working)return;this.working=true;let r;
+    if(this.working)return;this.working=true;let r,table='documents';
     try {
       r=this.db.prepare("SELECT * FROM documents WHERE status NOT IN ('ready','deleted') AND retry_at<=? ORDER BY retry_at,uploaded_at LIMIT 1").get(Date.now());
+      if(!r) {
+        table='document_upgrades';
+        r=this.db.prepare("SELECT u.* FROM document_upgrades u JOIN documents d ON d.id=u.id WHERE d.status='ready' AND u.retry_at<=? ORDER BY u.retry_at,u.uploaded_at LIMIT 1").get(Date.now());
+        if(!r) {
+          const legacy=this.db.prepare("SELECT * FROM documents d WHERE status='ready' AND parser_version<2 AND NOT EXISTS (SELECT 1 FROM document_upgrades u WHERE u.id=d.id) ORDER BY uploaded_at LIMIT 1").get();
+          if(!legacy)return;
+          this.db.prepare('INSERT INTO document_upgrades SELECT * FROM documents WHERE id=?').run(legacy.id);
+          this.db.prepare("UPDATE document_upgrades SET status='queued',pages_json='[]',knowledge_json='[]',error='',retry_at=0,attempts=0,parser_version=2 WHERE id=?").run(legacy.id);
+          r=this.db.prepare('SELECT * FROM document_upgrades WHERE id=?').get(legacy.id);
+        }
+        // Keep the published pages/index intact until the replacement is complete.
+        if(!this.source(r.id))return;
+      }
       if(!r)return;
       let pages=JSON.parse(r.pages_json), knowledge=JSON.parse(r.knowledge_json);
       if(!pages.length) {
         pages=await this.read(path.join(this.dir(r.id),`original.${r.ext}`),r.ext,this.dir(r.id));
         if(!this.alive(r.id))return;
-        this.db.prepare("UPDATE documents SET pages_json=?,status='interpreting',error='',attempts=0,retry_at=0 WHERE id=?").run(JSON.stringify(pages),r.id);return;
+        this.db.prepare(`UPDATE ${table} SET pages_json=?,status='interpreting',error='',attempts=0,retry_at=0 WHERE id=?`).run(JSON.stringify(pages),r.id);return;
       }
       const pending=pages.find(p=>p.image&&!p.ledger);
       if(pending) {
@@ -102,7 +122,7 @@ export class DocumentService {
         // Upload time is never a substitute for a material date. Keep unknown unless date is literal page text.
         if(/^\d{4}-\d{2}-\d{2}$/.test(ledger.materialDate||'') && clean(ledger.dateQuote).includes(ledger.materialDate) && /发布|编制|材料日期|报告日期/.test(clean(ledger.dateQuote)) && resolveDate(ledger.materialDate,'') && pending.text.includes(clean(ledger.dateQuote))) pending.materialDate=ledger.materialDate;
         if(!this.alive(r.id))return;
-        this.db.prepare("UPDATE documents SET pages_json=?,error='',attempts=0,retry_at=0 WHERE id=?").run(JSON.stringify(pages),r.id);return;
+        this.db.prepare(`UPDATE ${table} SET pages_json=?,error='',attempts=0,retry_at=0 WHERE id=?`).run(JSON.stringify(pages),r.id);return;
       }
       // All visual pages are finished before the first knowledge request or memory insertion.
       const batch=knowledge.length, groups=Math.ceil(pages.length/4);
@@ -115,14 +135,19 @@ export class DocumentService {
         if(parsed.units.some(u=>!clean(u.question)||!clean(u.answer)||!['fact','interpretation','synthesis'].includes(u.basis)||!Array.isArray(u.pages)||!u.pages.length||u.pages.some(n=>!allowed.has(n))))throw new Error('知识单元缺少有效页码依据，将自动重试');
         knowledge.push({overview:clean(parsed.overview),units:parsed.units.slice(0,30).map(u=>({...u,question:clean(u.question,500),answer:clean(u.answer,4000)}))});
         if(!this.alive(r.id))return;
-        this.db.prepare("UPDATE documents SET status='organizing',knowledge_json=?,error='',attempts=0,retry_at=0 WHERE id=?").run(JSON.stringify(knowledge),r.id);return;
+        this.db.prepare(`UPDATE ${table} SET status='organizing',knowledge_json=?,error='',attempts=0,retry_at=0 WHERE id=?`).run(JSON.stringify(knowledge),r.id);return;
       }
       const dates=[...new Set(pages.flatMap(p=>[p.materialDate,...[...p.text.matchAll(/(?:发布日期|编制日期|材料日期|报告日期)[：:\s]*(\d{4}[-年/]\d{1,2}[-月/]\d{1,2}(?:日)?)/g)].map(m=>resolveDate(m[1],''))]).filter(Boolean))];
       const materialDate=dates.length===1?dates[0]:'';
       const markdown=`# ${r.name}\n\n来源 SHA256: ${r.digest}\n材料日期: ${materialDate||'未知（上传时间不作为材料日期）'}\n\n`+knowledge.map(g=>`## ${g.overview}\n\n`+g.units.map(u=>`### ${u.question}\n${u.answer}\n\n依据类型：${u.basis}；来源页：${u.pages.join(', ')}\n`).join('\n')).join('\n');
-      fs.writeFileSync(path.join(this.dir(r.id),'knowledge.md'),markdown,{mode:0o600});
+      fs.writeFileSync(path.join(this.dir(r.id),`knowledge-${hash(JSON.stringify(knowledge))}.md`),markdown,{mode:0o600});
       if(!this.alive(r.id))return;
-      this.db.prepare("UPDATE documents SET status='ready',material_date=?,error='',retry_at=0 WHERE id=?").run(materialDate,r.id);
+      this.memory.store.transaction(()=>{
+      this.db.prepare(`UPDATE ${table} SET status='ready',material_date=?,error='',retry_at=0 WHERE id=?`).run(materialDate,r.id);
+      if(table==='document_upgrades') {
+        this.db.prepare("UPDATE documents SET pages_json=?,knowledge_json=?,material_date=?,parser_version=2 WHERE id=? AND status='ready'").run(JSON.stringify(pages),JSON.stringify(knowledge),materialDate,r.id);
+        this.db.prepare('DELETE FROM document_upgrades WHERE id=?').run(r.id);
+      }
       this.memory.store.upsert(this.source(r.id));
       for (const chunk of this.db.prepare('SELECT * FROM memory_chunks WHERE source_id=? AND version=(SELECT version FROM memory_sources WHERE id=?)').all(r.id,r.id)) {
         const numbers=JSON.parse(chunk.sentence_ids).map(id=>Number(id.split(':')[1]));
@@ -130,9 +155,10 @@ export class DocumentService {
         this.db.prepare('INSERT OR REPLACE INTO memory_keywords VALUES(?,?)').run(chunk.id,keywords);
         this.memory.store.indexChunk(chunk.id,r.name,chunk.text);
       }
-      if(r.replaces&&r.replaces!==r.id)this.remove(r.replaces);
+      if(table==='documents'&&r.replaces&&r.replaces!==r.id)this.remove(r.replaces);
+      });
     } catch(e) {
-      if(r&&this.alive(r.id))this.db.prepare("UPDATE documents SET status=CASE WHEN status='ready' THEN 'organizing' ELSE status END,error=?,attempts=attempts+1,retry_at=? WHERE id=?").run(
+      if(r&&this.alive(r.id))this.db.prepare(`UPDATE ${table} SET status=CASE WHEN status='ready' THEN 'organizing' ELSE status END,error=?,attempts=attempts+1,retry_at=? WHERE id=?`).run(
         /LibreOffice|页|格式|文件/.test(e.message)&&! /HTTP/.test(e.message)?e.message.slice(0,200):'解读暂不可用，请检查大模型配置、图片支持和网络；将自动重试',Date.now()+Math.min(3600000,30000*2**Math.min(r.attempts,7)),r.id);
     } finally {this.working=false;}
   }
