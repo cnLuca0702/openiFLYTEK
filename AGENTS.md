@@ -68,3 +68,15 @@
 - `electron/package-mac.cjs` 将生产依赖实际安装到应用包中，不再软链接开发目录；Express/CORS/WS 归入运行依赖。对应用做 ad-hoc 签名并验证，未做 Developer ID 签名或 Apple 公证。
 - `electron/smoke-package.cjs` 验证包内 SQLite、原生 canvas、后端启动、记忆接口与文档上传/原文下载，测试使用临时 HOME 和空闲端口，不操作用户现有资料。
 - Apple Silicon Mac 已通过全部 45 项测试、前端构建、包内运行验证和 `hdiutil verify`。DMG 产物不提交 Git，位于构建机 Downloads 和本地忽略目录 `outputs/`。
+
+## 缺陷回归修复（2026-10-16）
+
+- 纪要噪音过滤在拼接说话人前先检查原文，不能把时间戳中的冒号当作说话人边界。
+- 会议列表独立处理官方数据读取失败，保留项目自有会议，并在 `sources.viaim` 中声明状态。仅 `VIAIM_DB_MISSING` 可视作没有官方会议，数据库损坏不得误报 404。外部库路径支持 `VIAIM_DB_PATH`，始终只读。
+- 音频后缀范围 `bytes=-N` 必须取末尾 N 字节；零后缀、空范围和空文件范围返回 416；媒体流兼容标准 Node HTTP 响应对象。
+- 93 项测试通过，详见 `design-plans/04-test-report-2026-10-15.md` 第 7 节。1.0.0 DMG 不含此次修复。
+- 安全待办：`server.listen(port)` 未限定回环地址，不能从日志 `localhost` 推断接口仅本机可达；鉴权与监听策略尚未整改。
+
+- 修复发布版本升级为 `1.0.1`，打包脚本同步写入 macOS 的应用版本字段；包内冒烟增加 D1/D2/D3 回归验证。
+
+- 1.0.1 已在 Apple Silicon Mac 完成 93 项测试、DMG 完整性校验与只读挂载后的包内回归检查；D1/D2/D3 验证通过。SHA256 与验收范围见测试报告第 8 节。

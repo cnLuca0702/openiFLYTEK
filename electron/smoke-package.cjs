@@ -12,10 +12,10 @@ const assert = require('node:assert/strict');
   const resources = path.join(bundle, 'Contents/Resources/app');
   assert.ok(!fs.lstatSync(path.join(resources, 'node_modules')).isSymbolicLink(), 'Dependencies must be bundled');
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'openiflytek-smoke-'));
-  const env = {...process.env, HOME:home, ELECTRON_RUN_AS_NODE:'1', VIAIM_MEMORY_SKIP_OFFICIAL:'1'};
+  const env = {...process.env, HOME:home, ELECTRON_RUN_AS_NODE:'1', VIAIM_MEMORY_SKIP_OFFICIAL:'1', VIAIM_DB_PATH:path.join(home,'missing-official.db')};
   let child;
   try {
-    execFileSync(runtime, ['-e', "require('node:sqlite'); const c=require('@napi-rs/canvas').createCanvas(8,8); if(!c.toBuffer('image/png').length)process.exit(1)"], {cwd:resources,env,stdio:'inherit'});
+    execFileSync(runtime, ['-e', "require('node:sqlite'); const c=require('@napi-rs/canvas').createCanvas(8,8); if(!c.toBuffer('image/png').length)process.exit(1); import('./server/summary_service.js').then(({buildTranscript})=>require('node:assert/strict').equal(buildTranscript({sentences:[{text:'📌 重点标记点 [00:23]'},{text:'00:25'},{text:'有效内容'}]}),'有效内容'))"], {cwd:resources,env,stdio:'inherit'});
     const reservation = net.createServer();reservation.listen(0,'127.0.0.1');await once(reservation,'listening');
     const port = reservation.address().port;await new Promise(resolve=>reservation.close(resolve));
     child = spawn(runtime,[path.join(resources,'server/server.js')],{cwd:resources,env:{...env,PORT:String(port)},stdio:['ignore','pipe','pipe']});
@@ -32,7 +32,20 @@ const assert = require('node:assert/strict');
     const document=(await response.json()).data;
     const original=await fetch(`http://127.0.0.1:${port}/api/documents/${encodeURIComponent(document.id)}/file/original`);
     assert.equal(await original.text(),'打包运行验证资料');
-    console.log('Packaged runtime, SQLite, ARM native canvas, memory API and document upload: OK');
+    const base = `http://127.0.0.1:${port}`;
+    const audio = Buffer.from('OggS123456789');
+    const recording = await fetch(`${base}/api/meetings/record`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'打包回归验证',durationMs:1000,sentences:[{text:'有效内容'}],audioBase64:'data:audio/ogg;base64,'+audio.toString('base64')})});
+    assert.equal(recording.status,200);
+    const meeting = (await recording.json()).data;
+    const list = await (await fetch(`${base}/api/meetings`)).json();
+    assert.equal(list.sources.viaim.code,'VIAIM_DB_MISSING');
+    assert.ok(list.data.some(m=>m.id===meeting.id));
+    const suffix = await fetch(`${base}/api/meetings/${encodeURIComponent(meeting.id)}/audio`,{headers:{Range:'bytes=-4'}});
+    assert.equal(suffix.status,206);
+    assert.deepEqual(Buffer.from(await suffix.arrayBuffer()),audio.subarray(-4));
+    const missing = await fetch(`${base}/api/meetings/missing/generate-ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    assert.equal(missing.status,404);
+    console.log('Packaged runtime, documents, transcript filtering, missing official DB and suffix Range: OK');
   } finally {
     if(child && child.exitCode===null){child.kill();await once(child,'exit');}
     fs.rmSync(home,{recursive:true,force:true});

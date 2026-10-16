@@ -64,6 +64,11 @@ if (fs.existsSync(plistPath)) {
   plist = plist.replace(/<key>CFBundleExecutable<\/key>\s*<string>[^<]+<\/string>/, '<key>CFBundleExecutable</key>\n\t<string>OpeniFLYTEK</string>');
   plist = plist.replace(/<key>CFBundleIdentifier<\/key>\s*<string>[^<]+<\/string>/, '<key>CFBundleIdentifier</key>\n\t<string>com.openiflytek.app</string>');
   
+  const version = require('../package.json').version;
+  for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
+    plist = plist.replace(new RegExp(`<key>${key}</key>\\s*<string>[^<]+</string>`), `<key>${key}</key>\n\t<string>${version}</string>`);
+  }
+
   // 注入麦克风隐私权限描述
   if (!plist.includes('NSMicrophoneUsageDescription')) {
     plist = plist.replace('</dict>', `\t<key>NSMicrophoneUsageDescription</key>\n\t<string>OpeniFLYTEK 需要访问麦克风以录制会议并执行双通道回声消除实时转写。</string>\n</dict>`);

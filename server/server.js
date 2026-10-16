@@ -6,7 +6,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { IFlytekOfficeNoteClient } from './iflytek_client.js';
-import { dbService } from './db_service.js';
+import { dbService, VIAIM_DB_PATH } from './db_service.js';
 import { NotebookPushService } from './notebook_push_service.js';
 import { notebookStore } from './notebook_store.js';
 import { NotebookIntegrationService } from './notebook_integration_service.js';
@@ -43,9 +43,13 @@ function isProjectMeetingId(meetingId) {
 function getMeetingDetailById(meetingId) {
   if (meetingId.startsWith('document:')) return documents?.source(meetingId);
   const isProject = isProjectMeetingId(meetingId);
-  const meeting = isProject
-    ? notebookStore.getProjectMeeting(meetingId)
-    : dbService.getMeetingDetail(meetingId);
+  let meeting;
+  try {
+    meeting = isProject ? notebookStore.getProjectMeeting(meetingId) : dbService.getMeetingDetail(meetingId);
+  } catch (error) {
+    if (!isProject && error.code === 'VIAIM_DB_MISSING') return null;
+    throw error;
+  }
   // 官方库（只读）中的会议，若用户已用大模型重新提炼过，则用落库结果覆盖显示
   if (meeting && !isProject) {
     const stored = notebookStore.getMeetingSummary(meetingId);
@@ -165,7 +169,10 @@ app.get('/api/meetings', (req, res) => {
     // 这里只做显示层隐藏（不修改官方库）；正式清理走 /api/notebook/legacy-imports 迁移流程。
     // 传 ?includeLegacy=1 可查看这些旧记录。
     const includeLegacy = req.query.includeLegacy === '1';
-    const viaimMeetings = dbService.getMeetings()
+    let official = [], viaim = { available: true };
+    try { official = dbService.getMeetings(); }
+    catch (error) { viaim = { available: false, code: error.code === 'VIAIM_DB_MISSING' ? 'VIAIM_DB_MISSING' : 'VIAIM_DB_UNAVAILABLE' }; }
+    const viaimMeetings = official
       .filter((m) => includeLegacy || !String(m.title || '').startsWith('[办公本]'))
       .map((m) => {
         const stored = notebookStore.getMeetingSummary(m.id);
@@ -173,7 +180,7 @@ app.get('/api/meetings', (req, res) => {
       });
     const list = [...viaimMeetings, ...notebookStore.getProjectMeetings()]
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-    res.json({ code: '000000', data: list });
+    res.json({ code: '000000', data: list, sources: { viaim } });
   } catch (err) {
     res.status(500).json({ code: '500', desc: `读取会议数据库失败: ${err.message}` });
   }
@@ -671,7 +678,8 @@ app.post('/api/notebook/notes/:id/import', async (req, res) => {
 // 仅只读列出；逐条替代和软删除必须在后续迁移 UI 中显式确认后才开放执行。
 app.get('/api/notebook/legacy-imports', (req, res) => {
   try {
-    res.json({ code: '000000', data: legacyMigration.listCandidates() });
+    if (!fs.existsSync(VIAIM_DB_PATH)) return res.json({ code: '000000', data: [], sources: { viaim: { available: false, code: 'VIAIM_DB_MISSING' } } });
+    res.json({ code: '000000', data: legacyMigration.listCandidates(), sources: { viaim: { available: true } } });
   } catch (err) {
     res.status(500).json({ code: '500', desc: `读取历史导入记录失败: ${err.message}` });
   }

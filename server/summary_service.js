@@ -46,19 +46,16 @@ ${SUMMARY_JSON_SCHEMA}`;
 
 // 过滤非语音噪音行：重点标记点、纯时间戳等（这类内容对纪要提炼无意义）
 function isNoiseLine(line) {
-  let bare = line.replace(/\s+/g, '');
-  if (!bare) return true;
-  // 兼容带说话人前缀的行：“重点打标: 📌 重点标记点 [00:23]”
-  bare = bare.replace(/^[^:：]{1,24}[:：]/, '');
-  // “📌 重点标记点 [00:23]”及其变体
-  if (/^(📌|🔖|🏷|📍|重点标记|标记点)/u.test(bare)) return true;
-  // 纯时间戳，如 [00:23] / 00:23
-  if (/^\[?\d{1,2}:\d{2}(:\d{2})?\]?$/.test(bare)) return true;
-  return false;
+  const bare = String(line || '').replace(/\s+/g, '');
+  const isNoise = (text) => !text || /^(📌|🔖|🏷|📍|重点标记|标记点)/u.test(text)
+    || /^\[?\d{1,2}:\d{2}(:\d{2})?\]?$/.test(text);
+  // Check the original text before considering an embedded speaker prefix.
+  // A timestamp colon or bracket must not be mistaken for a speaker delimiter.
+  return isNoise(bare) || isNoise(bare.replace(/^[^:：\[\]]{1,24}[:：]/, ''));
 }
 
 export function buildTranscript(meeting) {
-  const lines = (meeting.sentences || []).map((s) => {
+  const lines = (meeting.sentences || []).filter((s) => !isNoiseLine(s.text)).map((s) => {
     const speaker = s.speaker ? `${s.speaker}: ` : '';
     return `${speaker}${s.text || ''}`.trim();
   }).filter((l) => l && !isNoiseLine(l));

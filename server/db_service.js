@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
-export const VIAIM_DB_PATH = '/Users/yaban/Library/Preferences/com.viaim.vi/kitdata/db/kitdb.db';
+export const VIAIM_DB_PATH = process.env.VIAIM_DB_PATH || '/Users/yaban/Library/Preferences/com.viaim.vi/kitdata/db/kitdb.db';
 const DB_PATH = VIAIM_DB_PATH;
 const AUDIOS_DIR = '/Users/yaban/Library/Preferences/com.viaim.vi/kitdata/audios';
 
@@ -11,7 +11,7 @@ let db = null;
 function getDb() {
   if (!db) {
     if (!fs.existsSync(DB_PATH)) {
-      throw new Error(`VIAIM 数据库文件不存在: ${DB_PATH}`);
+      throw Object.assign(new Error(`VIAIM 数据库文件不存在: ${DB_PATH}`), { code: 'VIAIM_DB_MISSING' });
     }
     // 外部 VIAIM 数据库只读；项目新数据写入自有 notebook.db。
     db = new DatabaseSync(DB_PATH, { readOnly: true });

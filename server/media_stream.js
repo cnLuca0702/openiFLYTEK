@@ -16,7 +16,8 @@ export function mediaContentType(filePath) {
 
 export function streamLocalMedia(req, res, filePath) {
   if (!filePath || !fs.existsSync(filePath)) {
-    res.status(404).json({ code: '404', desc: '音频缓存不存在，请先下载或重新下载' });
+    res.writeHead(404, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ code: '404', desc: '音频缓存不存在，请先下载或重新下载' }));
     return;
   }
   const stat = fs.statSync(filePath);
@@ -41,13 +42,23 @@ export function streamLocalMedia(req, res, filePath) {
     res.end();
     return;
   }
-  const start = match[1] ? Number(match[1]) : 0;
-  const end = match[2] ? Math.min(Number(match[2]), fileSize - 1) : fileSize - 1;
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || start >= fileSize || end < start) {
+  const size = BigInt(fileSize);
+  let first, last;
+  if (match[1]) {
+    first = BigInt(match[1]);
+    last = match[2] ? BigInt(match[2]) : size - 1n;
+    if (last >= size) last = size - 1n;
+  } else {
+    const suffix = match[2] ? BigInt(match[2]) : 0n;
+    first = suffix > 0n ? (suffix >= size ? 0n : size - suffix) : size;
+    last = size - 1n;
+  }
+  if (first < 0n || first >= size || last < first) {
     res.writeHead(416, { 'Content-Range': `bytes */${fileSize}` });
     res.end();
     return;
   }
+  const start = Number(first), end = Number(last);
 
   res.writeHead(206, {
     'Accept-Ranges': 'bytes',
