@@ -135,3 +135,20 @@ test('文档长章节后续切块保留章节提示，页码不变',t=>{
   assert.ok(rows.length>2);assert.ok(rows.every(r=>r.text.includes('# 设备维护')));
   assert.ok(rows.every(r=>JSON.parse(r.sentence_ids).every(id=>id==='page:1')));
 });
+
+test('知识全景仅汇总有效可读来源与真实实体关联，删除和同名范围不串联',async t=>{
+  const {memoryPanorama}=await import('../server/memory_panorama.js');
+  const {store,service,put}=setup(t);
+  put('a','甲公司晨星项目使用ZX99。');const doc=put('document:b','甲公司晨星项目采用热备。');
+  doc.knowledge=[{units:[{question:'技术',answer:'热备',pages:[1]}]}];
+  put('c','乙公司晨星项目预算不同。');
+  extract(store,text=>[{type:'project',name:'晨星项目',scope:text.includes('甲公司')?'甲公司':'乙公司'}]);
+  const result=memoryPanorama(service);
+  assert.equal(result.totals.sources,3);assert.equal(result.totals.knowledgeUnits,1);
+  assert.equal(result.totals.documents,1);assert.equal(result.totals.meetings,2);
+  assert.equal(result.topics.length,2);
+  assert.deepEqual(new Set(result.topics.find(t=>t.scope==='甲公司').sourceIds),new Set(['a','document:b']));
+  store.remove('document:b');assert.equal(memoryPanorama(service).totals.knowledgeUnits,0);
+  service.getMeeting=id=>id==='c'?null:meeting('a','甲公司晨星项目使用ZX99。');
+  assert.ok(!memoryPanorama(service).sources.some(s=>s.id==='c'));
+});

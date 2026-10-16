@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { MemoryHub } from './components/MemoryHub';
+import { MemoryWorkspace } from './components/MemoryWorkspace';
 import { Header } from './components/Header';
 import { MeetingSidebar } from './components/MeetingSidebar';
 import { TranscriptionWorkspace } from './components/TranscriptionWorkspace';
@@ -15,8 +15,8 @@ import { ConfirmHost } from './components/ConfirmHost';
 
 export const App: React.FC = () => {
   const toast = useToast();
-  const [memoryOpen,setMemoryOpen] = useState(false);
-  const [memorySource,setMemorySource] = useState<MemoryCitation|null>(null);
+  const [sidebarTab,setSidebarTab] = useState<'recordings'|'memory'>('recordings');
+  const [documentSelection,setDocumentSelection] = useState<{id:string;page?:number;request:number}|null>(null);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [memorySeek, setMemorySeek] = useState<{ meetingId: string; startMs: number; request: number } | null>(null);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
@@ -552,28 +552,31 @@ export const App: React.FC = () => {
 
   const openMemorySource = async (citation:MemoryCitation) => {
     const evidence = await api.memoryEvidence(citation);
-    if(evidence.sourceType==='document') {setMemorySource(evidence);setMemoryOpen(true);return;}
+    if(evidence.sourceType==='document') {setDocumentSelection({id:evidence.meetingId,page:evidence.pages?.[0],request:Date.now()});setSidebarTab('memory');return;}
     if(isRecording)throw new Error('正在录音，结束录音后可定位播放');
     const detail=await api.getMeetingDetail(evidence.meetingId);
     if(!detail)throw new Error('来源会议已不可读取');
-    setMemoryOpen(false);setSelectedMeetingId(detail.id);setSelectedMeeting(detail);
+    setSidebarTab('recordings');setSelectedMeetingId(detail.id);setSelectedMeeting(detail);
     setMemorySeek({meetingId:detail.id,startMs:evidence.startMs,request:Date.now()});
   };
-  // 左栏「记忆与资料」标签：打开某份资料的解读详情（复用 MemoryHub 弹窗）
+  // 所有资料入口和引用统一在中栏打开。
   const openDocument = (docId: string) => {
-    setMemorySource({ sourceType: 'document', meetingId: docId } as MemoryCitation);
-    setMemoryOpen(true);
+    setDocumentSelection({id:docId,request:Date.now()});
+    setSidebarTab('memory');
   };
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-viaim-bg text-viaim-textMain select-none">
       {/* 顶部主导航栏（符合 Mac 沉浸式风格与原生交通灯对齐） */}
-      <Header deviceStatus={deviceStatus} onOpenMemory={()=>{setMemorySource(null);setMemoryOpen(true);}} />
-      <MemoryHub open={memoryOpen} onClose={()=>setMemoryOpen(false)} source={memorySource} onOpenMemory={openMemorySource} />
+      <Header deviceStatus={deviceStatus} onOpenMemory={()=>{setDocumentSelection(null);setSidebarTab('memory');}} />
 
       {/* 桌面端三栏工作台主体 */}
       <div className="flex flex-1 overflow-hidden">
         {/* 左栏：真实会议记录侧边栏 (280px) */}
         <MeetingSidebar
+          sidebarTab={sidebarTab}
+          onTabChange={setSidebarTab}
+          selectedDocumentId={documentSelection?.id||null}
+          onShowPanorama={()=>setDocumentSelection(null)}
           meetings={meetings}
           selectedMeetingId={selectedMeetingId}
           onSelectMeeting={handleSelectMeeting}
@@ -591,7 +594,12 @@ export const App: React.FC = () => {
         />
 
         {/* 中栏：转写编辑器与音频工作台 (弹性伸缩) */}
-        <div className="flex-1 overflow-hidden flex flex-col border-r border-viaim-border">
+        <div className="flex-1 min-w-0 overflow-hidden flex flex-col border-r border-viaim-border">
+          {sidebarTab==='memory'&&<>
+            {isRecording&&<button onClick={()=>setSidebarTab('recordings')} className="shrink-0 px-4 py-2 text-xs text-red-300 bg-red-500/10 text-left">● 正在录音 {recordingDuration} · 返回录音工作台</button>}
+            <MemoryWorkspace selection={documentSelection} onSelect={openDocument} onOverview={()=>setDocumentSelection(null)} onOpenMemory={openMemorySource}/>
+          </>}
+          <div className={sidebarTab==='recordings'?'flex flex-col flex-1 min-h-0':'hidden'}>
           <TranscriptionWorkspace
             meeting={isRecording ? null : selectedMeeting}
             memorySeek={memorySeek}
@@ -605,6 +613,7 @@ export const App: React.FC = () => {
             liveSentences={liveSentences}
             latestSentence={latestSentence}
           />
+          </div>
         </div>
 
         {/* 右栏：AI 会议大脑与智能办公本推屏面板 (392px，完全匹配 setting.ini 布局) */}

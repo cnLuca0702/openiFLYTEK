@@ -24,6 +24,10 @@ import { MemorySidebar } from './MemorySidebar';
 import { useConfirm } from '../hooks/useConfirm';
 
 interface MeetingSidebarProps {
+  sidebarTab:'recordings'|'memory';
+  onTabChange:(tab:'recordings'|'memory')=>void;
+  selectedDocumentId:string|null;
+  onShowPanorama:()=>void;
   meetings: Meeting[];
   selectedMeetingId: string | null;
   onSelectMeeting: (id: string) => void;
@@ -41,6 +45,7 @@ interface MeetingSidebarProps {
 }
 
 export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
+  sidebarTab, onTabChange, selectedDocumentId, onShowPanorama,
   meetings,
   selectedMeetingId,
   onSelectMeeting,
@@ -58,7 +63,6 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
 }) => {
   const headset = deviceStatus?.viaimHeadset;
   const notebook = deviceStatus?.officeNotebook;
-  const [sidebarTab, setSidebarTab] = useState<'recordings' | 'memory'>('recordings');
   const [searchTerm, setSearchTerm] = useState('');
   const [activeFilter, setActiveFilter] = useState<'all' | 'todos' | 'synced'>('all');
   const confirm = useConfirm();
@@ -94,7 +98,7 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
       {/* 侧栏双标签：录音与笔记 / 记忆与资料 */}
       <div className="shrink-0 flex gap-1 p-1.5 border-b border-viaim-border bg-viaim-bg/40 text-xs">
         <button
-          onClick={() => setSidebarTab('recordings')}
+          onClick={() => onTabChange('recordings')}
           className={`flex-1 py-1.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
             sidebarTab === 'recordings'
               ? 'bg-viaim-primary/20 text-indigo-300 border border-viaim-primary/40'
@@ -105,7 +109,7 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
           <span>录音与笔记</span>
         </button>
         <button
-          onClick={() => setSidebarTab('memory')}
+          onClick={() => onTabChange('memory')}
           className={`flex-1 py-1.5 rounded-lg font-semibold flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
             sidebarTab === 'memory'
               ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/40'
@@ -374,7 +378,7 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
       </div>
         </>
       ) : (
-        <MemorySidebar onOpenDocument={onOpenDocument} onOpenMemory={onOpenMemory} />
+        <MemorySidebar selectedDocumentId={selectedDocumentId} onShowPanorama={onShowPanorama} onOpenDocument={onOpenDocument} onOpenMemory={onOpenMemory} />
       )}
     </aside>
   );

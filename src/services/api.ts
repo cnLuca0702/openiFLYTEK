@@ -105,9 +105,16 @@ async function apiFetch(url: string, init?: RequestInit): Promise<any> {
 
 export interface DocumentInfo {id:string;name:string;ext:string;digest:string;uploadedAt:string;status:string;error:string;pageCount:number;interpreted:number;materialDate:string;replaces:string}
 export interface DocumentDetail extends DocumentInfo {pages:Array<{number:number;label:string;text:string;image:boolean;ledger?:{facts:string;charts:string}}> ;knowledge:Array<{overview:string;units:Array<{question:string;answer:string;basis:string;pages:number[]}>}>}
+export interface MemoryPanorama {
+  sources:Array<{id:string;title:string;type:string;date:string;chunks:number;facts:number;knowledgeUnits:number;citation:MemoryCitation}>;
+  topics:Array<{id:string;type:string;scope:string;name:string;sourceIds:string[];facts:number}>;
+  topicCount:number;unavailable:number;limited:boolean;pending:number;
+  totals:{sources:number;documents:number;meetings:number;facts:number;knowledgeUnits:number};
+}
 export interface MemoryInsights {pending:number;citations:MemoryCitation[];followups:Array<{id:string;type:string;scope:string;project:string;item:string;status:string;owners:string[];dueDate:string|null;overdue:boolean;history:Array<{id:string;chunkId:number;quote:string;observedAt:string}>}>;changes:Array<{scope:string;project:string;aspect:string;status:string;history:Array<{id:string;chunkId:number;quote:string}>}>}
 async function memoryRequest<T>(url:string,options?:RequestInit):Promise<T> {const res=await fetch(`${BASE_URL}${url}`,options);const data=await res.json();if(!res.ok||data.code!=='000000')throw new Error(data.desc||'记忆请求失败');return data.data;}
 export const api = {
+  memoryPanorama: () => memoryRequest<MemoryPanorama>('/memory/panorama'),
   documents: () => memoryRequest<DocumentInfo[]>('/documents'),
   document: (id:string) => memoryRequest<DocumentDetail>(`/documents/${encodeURIComponent(id)}`),
   uploadDocument: (file:File,replaces?:string) => { if(file.size>40*1024*1024||!file.size)return Promise.reject(new Error('文件不能为空，单文件最大40MB')); return memoryRequest<DocumentInfo>(`/documents?name=${encodeURIComponent(file.name)}&replaces=${encodeURIComponent(replaces||'')}`,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file}); },

@@ -43,6 +43,8 @@ const assert = require('node:assert/strict');
     const original=await fetch(`http://127.0.0.1:${port}/api/documents/${encodeURIComponent(document.id)}/file/original`);
     assert.equal(await original.text(),'打包运行验证资料');
     const base = `http://127.0.0.1:${port}`;
+    const overview=await fetch(`${base}/api/memory/panorama`);
+    assert.equal(overview.status,200);assert.equal((await overview.json()).data.totals.sources,0);
     const audio = Buffer.from('OggS123456789');
     const recording = await fetch(`${base}/api/meetings/record`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({title:'打包回归验证',durationMs:1000,sentences:[{text:'有效内容'}],audioBase64:'data:audio/ogg;base64,'+audio.toString('base64')})});
     assert.equal(recording.status,200);
@@ -50,12 +52,15 @@ const assert = require('node:assert/strict');
     const list = await (await fetch(`${base}/api/meetings`)).json();
     assert.equal(list.sources.viaim.code,'VIAIM_DB_MISSING');
     assert.ok(list.data.some(m=>m.id===meeting.id));
+    const panorama=(await (await fetch(`${base}/api/memory/panorama`)).json()).data;
+    assert.ok(panorama.sources.some(s=>s.id===meeting.id));
+    assert.equal(panorama.totals.meetings,1);
     const suffix = await fetch(`${base}/api/meetings/${encodeURIComponent(meeting.id)}/audio`,{headers:{Range:'bytes=-4'}});
     assert.equal(suffix.status,206);
     assert.deepEqual(Buffer.from(await suffix.arrayBuffer()),audio.subarray(-4));
     const missing = await fetch(`${base}/api/meetings/missing/generate-ai`,{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
     assert.equal(missing.status,404);
-    console.log('Packaged runtime, documents, transcript filtering, missing official DB and suffix Range: OK');
+    console.log('Packaged runtime, knowledge panorama, documents, transcript filtering, missing official DB and suffix Range: OK');
   } finally {
     if(child && child.exitCode===null){child.kill();await once(child,'exit');}
     fs.rmSync(home,{recursive:true,force:true});

@@ -11,6 +11,7 @@ import { NotebookPushService } from './notebook_push_service.js';
 import { notebookStore } from './notebook_store.js';
 import { NotebookIntegrationService } from './notebook_integration_service.js';
 import { streamLocalMedia } from './media_stream.js';
+import { memoryPanorama } from './memory_panorama.js';
 import { createMemoryService } from './memory_service.js';
 import { LegacyMigrationService } from './legacy_migration_service.js';
 import { publicProviders } from './llm_providers.js';
@@ -93,6 +94,12 @@ app.get('/api/documents/:id/file/:kind', (req,res) => {
 });
 app.delete('/api/documents/:id', (req,res) => {documents?.remove(req.params.id);res.json({code:'000000',data:true});});
 app.post('/api/documents/:id/retry', (req,res) => {documents?.retry(req.params.id);void documents?.tick();res.json({code:'000000',data:true});});
+app.get('/api/memory/panorama', async (_req,res) => {
+  try {
+    if(!memory)return res.status(503).json({desc:'记忆存储暂不可用'});
+    await memory.sync();res.json({code:'000000',data:memoryPanorama(memory)});
+  } catch {res.status(503).json({desc:'知识全景暂不可用，请稍后重试'});}
+});
 app.get('/api/memory/insights', async (req,res) => {
   try {await memory?.sync();res.json({code:'000000',data:memory?.insights(typeof req.query.meetingId==='string'?req.query.meetingId:undefined)||{followups:[],changes:[],citations:[],pending:0}});} catch (_) {res.status(503).json({desc:'自动跟进暂不可用'});}
 });

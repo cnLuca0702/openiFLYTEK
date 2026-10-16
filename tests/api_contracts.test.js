@@ -72,6 +72,8 @@ test('HTTP: 会议/文档/办公本接口的只读保护、校验与错误路径
     assert.equal(status.body.code, '000000');
     assert.equal(status.body.data.available, true);
     assert.equal((await json('GET', '/api/documents')).body.data.length, 0);
+    const panorama=await json('GET','/api/memory/panorama');
+    assert.equal(panorama.status,200);assert.equal(panorama.body.data.totals.sources,0);
     const insights = await json('GET', '/api/memory/insights');
     assert.equal(insights.status, 200);
     assert.deepEqual(Object.keys(insights.body.data).sort(), ['changes', 'citations', 'followups', 'pending']);
@@ -106,9 +108,12 @@ test('HTTP: 会议/文档/办公本接口的只读保护、校验与错误路径
     assert.equal((await json('GET', '/api/meetings?includeLegacy=1')).status,200);
 
 
+    const panorama=await json('GET','/api/memory/panorama');
+    assert.equal(panorama.status,200);assert.ok(panorama.body.data.sources.some(s=>s.id===meeting.id));
     const removed = await json('DELETE', `/api/meetings/${encodeURIComponent(meeting.id)}`);
     assert.equal(removed.status, 200);
     assert.equal(removed.body.data.success, true);
+    assert.ok(!(await json('GET','/api/memory/panorama')).body.data.sources.some(s=>s.id===meeting.id));
     assert.equal((await json('GET', `/api/meetings/${encodeURIComponent(meeting.id)}`)).status, 404);
     assert.equal((await json('DELETE', `/api/meetings/${encodeURIComponent(meeting.id)}`)).status, 500, '重复删除应报错而不是静默成功');
   });

@@ -23,12 +23,14 @@ const states: Record<string, string> = {
 };
 
 interface MemorySidebarProps {
+  selectedDocumentId:string|null;
+  onShowPanorama:()=>void;
   onOpenDocument: (docId: string) => void;
   onOpenMemory: (citation: MemoryCitation) => Promise<void>;
 }
 
 /** 左侧栏「记忆与资料」标签：以会话记录的方式管理、检索、操作上传的资料 */
-export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, onOpenMemory }) => {
+export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, onOpenMemory, selectedDocumentId, onShowPanorama }) => {
   const [docs, setDocs] = useState<DocumentInfo[]>([]);
   const [insights, setInsights] = useState<MemoryInsights | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -84,6 +86,7 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, on
     if (!ok) return;
     try {
       await api.deleteDocument(d.id);
+      if(selectedDocumentId===d.id)onShowPanorama();
       await refresh();
     } catch (e: any) { setError(e.message); }
   };
@@ -114,6 +117,7 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, on
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
+      <button onClick={onShowPanorama} aria-current={!selectedDocumentId?'page':undefined} className={`shrink-0 m-3 mb-0 p-2.5 rounded-lg border text-xs text-left ${!selectedDocumentId?'border-cyan-500/60 bg-cyan-500/10 text-viaim-primary':'border-viaim-border text-viaim-textDim hover:text-viaim-primary'}`}>◎ 知识全景</button>
       {/* 上传区（点击或拖拽） */}
       <div className="shrink-0 p-3 border-b border-viaim-border">
         <label
@@ -166,7 +170,7 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, on
             {filteredDocs.map((d) => {
               const processing = d.status === 'queued' || d.status === 'interpreting' || d.status === 'organizing';
               return (
-                <div key={d.id} className="space-y-1.5">
+                <div key={d.id} className={`space-y-1.5 rounded-xl ${selectedDocumentId===d.id?'ring-1 ring-cyan-500/60 bg-cyan-500/5':''}`}>
                   {/* 用户侧：上传动作 */}
                   <div className="flex items-start justify-end gap-1.5">
                     <div className="max-w-[85%] px-2.5 py-1.5 rounded-xl rounded-tr-sm bg-viaim-primary/15 border border-viaim-primary/30 text-[11px] text-viaim-textMain">
@@ -181,8 +185,8 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, on
                     <div className="min-w-0 flex-1 px-2.5 py-2 rounded-xl rounded-tl-sm bg-viaim-card/80 border border-viaim-border text-[11px]">
                       <button
                         onClick={() => onOpenDocument(d.id)}
-                        className="text-left text-cyan-300 hover:text-cyan-200 break-all cursor-pointer"
-                        title="查看解读详情（原文页面与整理后的知识）"
+                        className="text-left text-cyan-300 hover:text-viaim-primary break-all cursor-pointer"
+                        title="在中栏查看知识与原文"
                       >
                         {d.name}
                       </button>
@@ -247,7 +251,7 @@ export const MemorySidebar: React.FC<MemorySidebarProps> = ({ onOpenDocument, on
                         <button
                           key={h.id}
                           onClick={() => void onOpenMemory(citation).catch((e: any) => setError(e.message))}
-                          className="mt-1 text-[10px] text-cyan-300 hover:text-cyan-200 cursor-pointer"
+                          className="mt-1 text-[10px] text-cyan-300 hover:text-viaim-primary cursor-pointer"
                         >
                           核对来源{h.observedAt ? ` · ${fmtTime(h.observedAt)}` : ''}
                         </button>
