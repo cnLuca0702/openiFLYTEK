@@ -16,7 +16,8 @@ import {
   Plus,
   Radio,
   NotebookPen,
-  Brain
+  Brain,
+  MoreHorizontal
 } from 'lucide-react';
 import { Meeting, DevicesStatusResponse } from '../types';
 import { MemoryCitation } from '../services/api';
@@ -31,6 +32,9 @@ interface MeetingSidebarProps {
   meetings: Meeting[];
   selectedMeetingId: string | null;
   onSelectMeeting: (id: string) => void;
+  onOpenSummary: (id: string) => void;
+  onGenerateSummary: (id: string, force: boolean) => void;
+  generatingMeetingId: string | null;
   pushedMeetingIds: Set<string>;
   onDeleteMeeting: (id: string) => void;
   onPushToNotebook: (meetingId: string) => void;
@@ -48,7 +52,7 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
   sidebarTab, onTabChange, selectedDocumentId, onShowPanorama,
   meetings,
   selectedMeetingId,
-  onSelectMeeting,
+  onSelectMeeting, onOpenSummary, onGenerateSummary, generatingMeetingId,
   pushedMeetingIds,
   onDeleteMeeting,
   onPushToNotebook,
@@ -282,6 +286,14 @@ export const MeetingSidebar: React.FC<MeetingSidebarProps> = ({
                   </div>
                 </div>
 
+                <details className="mb-2 text-xs" onClick={e => e.stopPropagation()}>
+                  <summary aria-label={`${m.title}的更多操作`} className="cursor-pointer text-viaim-textDim flex items-center gap-1 w-fit"><MoreHorizontal className="w-4 h-4" />会议操作</summary>
+                  <div className="mt-1 rounded-lg border border-viaim-border bg-viaim-bg p-1 flex flex-col items-stretch">
+                    <button disabled={isRecording} className="text-left px-2 py-2 hover:bg-viaim-card disabled:opacity-40" onClick={e => { e.currentTarget.closest('details')?.removeAttribute('open'); onOpenSummary(m.id); }}>查看会议纪要</button>
+                    <button disabled={isRecording || !!generatingMeetingId} className="text-left px-2 py-2 hover:bg-viaim-card disabled:opacity-40" onClick={e => { e.currentTarget.closest('details')?.removeAttribute('open'); onGenerateSummary(m.id, !!(m.hasSummary || m.aiSummary?.generated)); }}>{m.hasSummary || m.aiSummary?.generated ? '重新生成纪要' : '生成会议纪要'}</button>
+                  </div>
+                </details>
+                {generatingMeetingId === m.id && <p role="status" className="mb-2 text-[11px] text-indigo-300 animate-pulse">正在生成纪要…</p>}
                 <div className="flex items-center justify-between text-[11px] text-viaim-textDim">
                   <div className="flex items-center gap-2">
                     <span className="flex items-center gap-1 font-mono">

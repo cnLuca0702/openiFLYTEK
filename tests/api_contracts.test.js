@@ -242,9 +242,8 @@ test('HTTP: 会议/文档/办公本接口的只读保护、校验与错误路径
     assert.ok([200, 404, 500, 503].includes(chat.status), `异常状态 ${chat.status}`);
     if (chat.status !== 200) assert.ok(chat.body.desc, '错误响应必须带可读说明');
     const scoped = await json('POST', '/api/ai/chat', { question: '结论是什么', meetingIds: ['viaim-1'] });
-    assert.equal(scoped.status, 200);
-    assert.match(scoped.body.data.answer, /未找到|无法读取|不存在/, '范围指向不可读会议时必须如实说明而非编造');
-    assert.deepEqual(scoped.body.data.citations, []);
+    assert.equal(scoped.status, 400);
+    assert.match(scoped.body.desc, /删除|不可读取/, '失效的显式范围必须拒绝，不得扩展为全库');
   });
 
   await t.test('用户画像接口在缺少官方配置时仍返回兜底数据', async () => {

@@ -11,12 +11,24 @@ import {
   User,
   FileText,
   ScrollText,
-  AudioLines
+  AudioLines,
+  Bookmark
 } from 'lucide-react';
+import { MeetingSummary } from './MeetingSummary';
+import { MemoryCitation } from '../services/api';
 import { Meeting, Sentence } from '../types';
 
 interface TranscriptionWorkspaceProps {
   meeting: Meeting | null;
+  summaryRequest: { meetingId: string; request: number } | null;
+  onGenerateAiSummary: (options?: { force?: boolean }) => void;
+  isGeneratingAi: boolean;
+  generationBusy: boolean;
+  generationError: string;
+  pendingTodoIds: Set<string>;
+  onToggleTodo: (id: string) => void;
+  onOpenMemory: (citation: MemoryCitation) => Promise<void>;
+
   memorySeek?: { meetingId: string; startMs: number; request: number } | null;
   onUpdateTitle: (newTitle: string) => void;
   onSentenceEdit: (sentenceId: string, newText: string) => void;
@@ -25,12 +37,13 @@ interface TranscriptionWorkspaceProps {
   isPaused: boolean;
   onPauseResume: () => void;
   onStopRecording: () => void;
+  onAddBookmark: () => void;
   liveSentences: Partial<Sentence>[];
   latestSentence: string;
 }
 
 export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
-  meeting,
+  meeting, summaryRequest, onGenerateAiSummary, isGeneratingAi, generationBusy, generationError, pendingTodoIds, onToggleTodo, onOpenMemory,
   memorySeek,
   onUpdateTitle,
   onSentenceEdit,
@@ -39,6 +52,7 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
   isPaused,
   onPauseResume,
   onStopRecording,
+  onAddBookmark,
   liveSentences,
   latestSentence
 }) => {
@@ -65,6 +79,10 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
       }
     }
   }, [meeting?.id]);
+
+  useEffect(() => {
+    if (summaryRequest?.meetingId === meeting?.id && !isRecording) setLowerTab('summary');
+  }, [summaryRequest, meeting?.id, isRecording]);
 
   useEffect(() => {
     const audio = audioRef.current;
@@ -140,7 +158,6 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
     ? (/^https?:\/\//i.test(meeting.audioUrl) ? meeting.audioUrl : `http://localhost:3800${meeting.audioUrl}`)
     : null;
 
-  const summary = meeting?.aiSummary;
 
   // ==================== 录制中：实时 ASR 视图 ====================
   const liveView = (
@@ -272,7 +289,7 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
         ) : (
           <div className="h-64 flex flex-col items-center justify-center text-viaim-textDim text-xs">
             <Mic className="w-8 h-8 stroke-1 mb-2 opacity-40 text-viaim-primary animate-pulse" />
-            <p>该会议暂无句子记录，可点击文件名前的播放按钮试听，或使用右栏 AI 会议大脑重新提炼。</p>
+            <p>该会议暂无转写文字。完成转写后，可在「会议纪要」中生成摘要和待办。</p>
           </div>
         )}
       </div>
@@ -280,70 +297,10 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
   );
 
   // ==================== 会议纪要标签页 ====================
-  const summaryView = (
-    <div className="flex-1 overflow-y-auto p-5 space-y-4 custom-scrollbar select-text">
-      {summary?.generated || summary?.abstract || (summary?.topics && summary.topics.length) ? (
-        <>
-          {summary.title && (
-            <h2 className="text-sm font-bold text-viaim-textMain">{summary.title}</h2>
-          )}
-          <section>
-            <h3 className="text-[11px] font-bold text-viaim-textDim uppercase tracking-wider mb-1.5 flex items-center gap-1.5">
-              <Sparkles className="w-3 h-3 text-viaim-primary" /> 核心摘要
-            </h3>
-            <p className="text-xs text-slate-200 leading-relaxed bg-viaim-card/60 border border-viaim-border rounded-xl p-3">
-              {summary.abstract}
-            </p>
-          </section>
-          {summary.topics && summary.topics.length > 0 && (
-            <section>
-              <h3 className="text-[11px] font-bold text-viaim-textDim uppercase tracking-wider mb-1.5">主要议题</h3>
-              <ul className="space-y-1.5">
-                {summary.topics.map((t, i) => (
-                  <li key={i} className="text-xs text-slate-200 leading-relaxed flex gap-2">
-                    <span className="text-viaim-primary font-bold shrink-0">{i + 1}.</span>
-                    <span>{t}</span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-          {summary.todos && summary.todos.length > 0 && (
-            <section>
-              <h3 className="text-[11px] font-bold text-viaim-textDim uppercase tracking-wider mb-1.5">待办事项</h3>
-              <ul className="space-y-1.5">
-                {summary.todos.map((t) => (
-                  <li key={t.id} className="text-xs text-slate-200 leading-relaxed flex gap-2">
-                    <span className={`shrink-0 ${t.done ? 'text-emerald-500' : 'text-amber-500'}`}>
-                      {t.done ? '✓' : '○'}
-                    </span>
-                    <span>
-                      {t.task}
-                      {t.owner ? <span className="text-viaim-textDim">（{t.owner}）</span> : null}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-          {summary.summaryFull && (
-            <section>
-              <h3 className="text-[11px] font-bold text-viaim-textDim uppercase tracking-wider mb-1.5">完整纪要</h3>
-              <p className="text-xs text-slate-200 leading-relaxed whitespace-pre-wrap bg-viaim-card/60 border border-viaim-border rounded-xl p-3">
-                {summary.summaryFull}
-              </p>
-            </section>
-          )}
-        </>
-      ) : (
-        <div className="h-64 flex flex-col items-center justify-center text-viaim-textDim text-xs">
-          <ScrollText className="w-8 h-8 stroke-1 mb-2 opacity-40 text-viaim-primary" />
-          <p>该会议尚未生成 AI 纪要</p>
-          <p className="mt-1 text-[11px] opacity-70">可在右侧「AI 会议大脑」中一键提炼完整会议纪要</p>
-        </div>
-      )}
-    </div>
-  );
+  const summaryView = meeting ? <MeetingSummary key={meeting.id} meeting={meeting}
+    onGenerateAiSummary={onGenerateAiSummary} isGeneratingAi={isGeneratingAi}
+    generationBusy={generationBusy} generationError={generationError} pendingTodoIds={pendingTodoIds}
+    onToggleTodo={onToggleTodo} onOpenMemory={onOpenMemory} /> : null;
 
   return (
     <main className="flex-1 h-full flex flex-col overflow-hidden bg-viaim-bg select-text">
@@ -368,8 +325,8 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
       )}
 
       {/* 顶部标题与播放/录制控制栏（与左栏「新建会议录制」按钮同行对齐、等高 h-9） */}
-      <div className="p-4 border-b border-viaim-border bg-viaim-card/40 flex items-center justify-between shrink-0">
-        <div className="flex-1 mr-4 flex items-center gap-3 min-w-0">
+      <div className="p-4 border-b border-viaim-border bg-viaim-card/40 flex flex-wrap items-center justify-between gap-y-3 shrink-0">
+        <div className="flex-1 basis-[220px] mr-4 flex items-center gap-3 min-w-0">
           {/* 播放按钮：置于文件名前 */}
           {!isRecording && (
             <button
@@ -422,7 +379,7 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
             </div>
           )}
 
-          <div className="flex items-center gap-3 mt-1 text-xs text-viaim-textDim">
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1 text-xs text-viaim-textDim">
             {isRecording ? (
               <>
                 <span>{new Date().toLocaleString('zh-CN')}</span>
@@ -447,7 +404,7 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
         </div>
 
         {/* 右侧控制区：录制中=录音状态 + 暂停/继续/结束（非录制时右侧无控件） */}
-        <div className="flex items-center gap-2 shrink-0">
+        <div className="ml-auto flex flex-wrap items-center gap-2 max-w-full shrink-0">
           {isRecording ? (
             <>
               <div className="h-9 px-3 rounded-lg bg-red-500/15 border border-red-500/50 flex items-center gap-2" title="当前正在录音">
@@ -461,6 +418,9 @@ export const TranscriptionWorkspace: React.FC<TranscriptionWorkspaceProps> = ({
                 title={isPaused ? '继续录音' : '暂停录音'}
               >
                 {isPaused ? <Play className="w-4 h-4 fill-current ml-0.5" /> : <Pause className="w-4 h-4 fill-current" />}
+              </button>
+              <button onClick={onAddBookmark} title="标记重点" aria-label="标记重点" className="w-9 h-9 rounded-lg bg-viaim-card border border-viaim-border flex items-center justify-center text-viaim-amber hover:bg-viaim-cardHover">
+                <Bookmark className="w-4 h-4" />
               </button>
               <button
                 onClick={onStopRecording}

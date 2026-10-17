@@ -18,10 +18,14 @@ const WHISPER_MODEL_PREFERENCE = [
   /large-v3-turbo/i, /large-v3/i, /large/i, /medium/i, /small/i, /base/i, /tiny/i,
 ];
 
+function toolPath(name) {
+  return ['/opt/homebrew/bin', '/usr/local/bin'].map(dir => path.join(dir, name)).find(p => fs.existsSync(p)) || name;
+}
+
 function ensureFfmpeg() {
-  const probe = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' });
+  const probe = spawnSync(toolPath('ffmpeg'), ['-version'], { encoding: 'utf8' });
   if (probe.error || probe.status !== 0) {
-    throw new Error('未检测到 ffmpeg，无法转写音频。请先安装：brew install ffmpeg');
+    throw new Error('缺少音频转换工具，请在语音转写设置中点击“一键安装本地转写”');
   }
 }
 
@@ -30,15 +34,15 @@ function toWav(inputPath, outPath, fromSec = null, durSec = null) {
   if (fromSec != null) args.push('-ss', String(fromSec));
   if (durSec != null) args.push('-t', String(durSec));
   args.push('-ar', '16000', '-ac', '1', outPath);
-  const r = spawnSync('ffmpeg', args, { encoding: 'utf8' });
+  const r = spawnSync(toolPath('ffmpeg'), args, { encoding: 'utf8' });
   if (r.status !== 0) throw new Error(`音频转码失败: ${(r.stderr || '').slice(0, 200)}`);
 }
 
 // ==================== 本地 whisper.cpp ====================
 
 export function findWhisperCli() {
-  const probe = spawnSync('whisper-cli', ['-h'], { encoding: 'utf8' });
-  return probe.error ? null : 'whisper-cli';
+  const probe = spawnSync(toolPath('whisper-cli'), ['-h'], { encoding: 'utf8', timeout: 5000 });
+  return probe.error || probe.status !== 0 ? null : toolPath('whisper-cli');
 }
 
 export function findWhisperModel() {
@@ -55,7 +59,7 @@ export function findWhisperModel() {
 }
 
 export function localAsrAvailable() {
-  return Boolean(findWhisperCli() && findWhisperModel());
+  return Boolean(findWhisperCli() && findWhisperModel() && ffmpegAvailable());
 }
 
 export function onlineAsrAvailable() {
@@ -65,9 +69,9 @@ export function onlineAsrAvailable() {
 // 返回 [{startMs,endMs,text}]；不可用/失败抛错（由调用方决定是否回退）
 function transcribeWithWhisper(wavPath) {
   const cli = findWhisperCli();
-  if (!cli) throw new Error('未安装 whisper-cli（brew install whisper-cpp）');
+  if (!cli) throw new Error('缺少本地识别引擎，请在语音转写设置中点击“一键安装本地转写”');
   const model = findWhisperModel();
-  if (!model) throw new Error('未找到本地 whisper 模型（ggml-*.bin）');
+  if (!model) throw new Error('缺少本地语音模型，请在语音转写设置中点击“一键安装本地转写”');
 
   const outBase = `${wavPath}.whisper`;
   const r = spawnSync(cli, [
@@ -294,12 +298,18 @@ export async function transcribeLiveTail({ audioBuffer, fromMs = 0 }) {
   }
 }
 
+function ffmpegAvailable() {
+  const probe = spawnSync(toolPath('ffmpeg'), ['-version'], {encoding:'utf8',timeout:5000});
+  return !probe.error && probe.status === 0;
+}
+
 // ASR 环境状态（设置面板展示用）
 export function getAsrStatus() {
   return {
     local: {
       available: localAsrAvailable(),
       cli: Boolean(findWhisperCli()),
+      ffmpeg: ffmpegAvailable(),
       model: findWhisperModel() ? path.basename(findWhisperModel()) : '',
     },
     online: {

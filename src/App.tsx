@@ -4,7 +4,6 @@ import { Header } from './components/Header';
 import { MeetingSidebar } from './components/MeetingSidebar';
 import { TranscriptionWorkspace } from './components/TranscriptionWorkspace';
 import { AiSummaryPanel } from './components/AiSummaryPanel';
-import { SuspendQuickWindow } from './components/SuspendQuickWindow';
 import { NotebookHubModal } from './components/NotebookHubModal';
 import { SettingsModal } from './components/SettingsModal';
 import { api, onTokenExpired, MemoryCitation } from './services/api';
@@ -29,15 +28,20 @@ export const App: React.FC = () => {
   const [recordingDuration, setRecordingDuration] = useState<string>('00:00');
   const [latestSentence, setLatestSentence] = useState<string>('');
 
-  // 浮窗与模态框（悬浮录音条默认不自动弹出，由用户点击顶部按钮手动唤起）
-  const [isQuickBarOpen, setIsQuickBarOpen] = useState<boolean>(false);
+  // 模态框
   const [isNotebookHubOpen, setIsNotebookHubOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<'general'|'qa'>('general');
 
   // 状态指示
-  const [isGeneratingAi, setIsGeneratingAi] = useState<boolean>(false);
+  const [generatingMeetingId, setGeneratingMeetingId] = useState<string | null>(null);
+  const generatingMeetingRef = useRef<string | null>(null);
+  const [summaryErrors, setSummaryErrors] = useState<Record<string, string>>({});
+  const [summaryRequest, setSummaryRequest] = useState<{meetingId: string; request: number} | null>(null);
+  const [pendingTodos, setPendingTodos] = useState<Set<string>>(new Set());
+  const pendingTodosRef = useRef(new Set<string>());
+  const detailRequestRef = useRef(0);
   const [isTranscribing, setIsTranscribing] = useState<boolean>(false);
-  const [autoSummaryEnabled, setAutoSummaryEnabled] = useState<boolean>(true);
   const [isPushing, setIsPushing] = useState<boolean>(false);
   const [pushedMeetingIds, setPushedMeetingIds] = useState<Set<string>>(new Set());
   const [pushedResult, setPushedResult] = useState<any>(null);
@@ -51,9 +55,6 @@ export const App: React.FC = () => {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const analyserRef = useRef<AnalyserNode | null>(null);
-  const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
   const currentSentencesRef = useRef<Partial<Sentence>[]>([]);
   const speechRecognitionRef = useRef<any>(null);
 
@@ -68,13 +69,6 @@ export const App: React.FC = () => {
     loadInitialData();
     const interval = setInterval(loadDevices, 8000);
     return () => clearInterval(interval);
-  }, []);
-
-  // 读取「录制结束后自动提炼」开关状态
-  useEffect(() => {
-    api.getLlmConfig()
-      .then((cfg) => setAutoSummaryEnabled(cfg.autoSummary))
-      .catch(() => {});
   }, []);
 
   // 监听 token 失效事件（任意云端请求 detail.tokenExpired=true 时触发）
@@ -113,9 +107,10 @@ export const App: React.FC = () => {
   };
 
   const loadMeetingDetail = async (id: string) => {
+    const request = ++detailRequestRef.current;
     try {
       const detail = await api.getMeetingDetail(id);
-      setSelectedMeeting(detail);
+      if (request === detailRequestRef.current) setSelectedMeeting(detail);
     } catch (err) {
       console.error('加载会议详情失败:', err);
     }
@@ -123,7 +118,8 @@ export const App: React.FC = () => {
 
   const handleSelectMeeting = (id: string) => {
     setSelectedMeetingId(id);
-    loadMeetingDetail(id);
+    setSelectedMeeting(null);
+    return loadMeetingDetail(id);
   };
 
   // 真实录音计时（暂停时不累计）
@@ -207,17 +203,6 @@ export const App: React.FC = () => {
         } 
       });
 
-      // 连接 Web Audio Analyser
-      const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-      const source = audioCtx.createMediaStreamSource(stream);
-      const analyser = audioCtx.createAnalyser();
-      analyser.fftSize = 64;
-      source.connect(analyser);
-
-      audioContextRef.current = audioCtx;
-      analyserRef.current = analyser;
-      setAnalyserNode(analyser);
-
       // 启动 MediaRecorder
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorder.ondataavailable = (event) => {
@@ -279,7 +264,6 @@ export const App: React.FC = () => {
       }
 
       setIsRecording(true);
-      setIsQuickBarOpen(true);
       setRecordingSeconds(0);
       setRecordingDuration('00:00');
       setLatestSentence('正在录音…');
@@ -309,13 +293,6 @@ export const App: React.FC = () => {
     if (speechRecognitionRef.current) {
       try { speechRecognitionRef.current.stop(); } catch (_) {}
     }
-
-    if (audioContextRef.current) {
-      audioContextRef.current.close().catch(() => {});
-      audioContextRef.current = null;
-    }
-    analyserRef.current = null;
-    setAnalyserNode(null);
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -397,22 +374,6 @@ export const App: React.FC = () => {
     }
   };
 
-  // 结束并立即提炼（受「录制结束后自动提炼」开关控制）
-  const handleFinishAndSummarize = async () => {
-    if (!isRecording) return;
-    await handleStopRealRecording();
-
-    let auto = autoSummaryEnabled;
-    try {
-      const cfg = await api.getLlmConfig();
-      auto = cfg.autoSummary;
-      setAutoSummaryEnabled(cfg.autoSummary);
-    } catch (_) {
-      /* 读取失败时沿用已有开关状态 */
-    }
-    if (auto) setTimeout(() => handleGenerateAiSummary(), 800);
-  };
-
   // 离线转写当前会议音频（智谱 glm-asr），成功后刷新转写列表
   const transcribeAndRefresh = async (meetingId: string, options: { silentOnMissingKey?: boolean } = {}) => {
     setIsTranscribing(true);
@@ -434,16 +395,19 @@ export const App: React.FC = () => {
   };
 
   // 触发 AI 纪要生成（options.force=true 时忽略缓存，重新调用大模型提炼）
-  const handleGenerateAiSummary = async (options: { force?: boolean } = {}) => {
-    if (!selectedMeetingId) return;
-    const meetingId = selectedMeetingId;
-    setIsGeneratingAi(true);
+  const handleGenerateAiSummary = async (options: { force?: boolean } = {}, targetId?: string) => {
+    const meetingId = targetId || selectedMeeting?.id;
+    if (!meetingId || generatingMeetingRef.current) return;
+    generatingMeetingRef.current = meetingId;
+    setGeneratingMeetingId(meetingId);
+    setSummaryErrors(prev => ({...prev, [meetingId]: ''}));
     try {
       const summary = await api.generateAiSummary(meetingId, { force: options.force });
       setSelectedMeeting((prev) => (prev && prev.id === meetingId ? { ...prev, aiSummary: summary } : prev));
       setMeetings((prev) => prev.map((m) => (m.id === meetingId ? { ...m, aiSummary: summary, hasSummary: true } : m)));
-      toast.success(options.force ? '已重新提炼 AI 纪要' : 'AI 纪要已生成', { title: 'AI 会议大脑' });
+      toast.success(options.force ? '已重新提炼 AI 纪要' : 'AI 纪要已生成', { title: '会议纪要' });
     } catch (err: any) {
+      setSummaryErrors(prev => ({...prev, [meetingId]: err?.message || '生成失败，请稍后重试'}));
       if (err?.code === 'LLM_NOT_CONFIGURED') {
         toast.warning(err?.message || '请先在设置中配置大模型引擎', {
           title: '未配置大模型',
@@ -454,27 +418,38 @@ export const App: React.FC = () => {
         toast.error(err?.message || '提炼失败，请稍后重试', { title: 'AI 纪要提炼失败', duration: 8000 });
       }
     } finally {
-      setIsGeneratingAi(false);
+      generatingMeetingRef.current = null;
+      setGeneratingMeetingId(null);
     }
   };
 
   // 切换真实待办事项
   const handleToggleTodo = async (todoId: string) => {
-    if (!selectedMeetingId) return;
+    const meetingId = selectedMeeting?.id;
+    const key = `${meetingId}:${todoId}`;
+    if (!meetingId || selectedMeeting?.source === 'viaim' || pendingTodosRef.current.has(key)) return;
+    pendingTodosRef.current.add(key);
+    setPendingTodos(new Set(pendingTodosRef.current));
     try {
-      const updatedTodos = await api.toggleTodo(selectedMeetingId, todoId);
-      if (selectedMeeting && selectedMeeting.aiSummary) {
-        setSelectedMeeting({
-          ...selectedMeeting,
-          aiSummary: {
-            ...selectedMeeting.aiSummary,
-            todos: updatedTodos
-          }
-        });
-      }
-    } catch (err) {
-      console.error('更新待办状态失败:', err);
+      const todos = await api.toggleTodo(meetingId, todoId);
+      setSelectedMeeting(prev => prev?.id === meetingId && prev.aiSummary
+        ? {...prev, aiSummary: {...prev.aiSummary, todos}} : prev);
+      setMeetings(prev => prev.map(m => m.id === meetingId
+        ? {...m, todoCount: todos.length, ...(m.aiSummary ? {aiSummary: {...m.aiSummary, todos}} : {})} : m));
+    } catch (err: any) {
+      toast.error(err?.message || '更新待办状态失败，请重试');
+    } finally {
+      pendingTodosRef.current.delete(key);
+      setPendingTodos(new Set(pendingTodosRef.current));
     }
+  };
+
+  const openMeetingSummary = async (id: string) => {
+    if (isRecording) return;
+    setSidebarTab('recordings');
+    if (id !== selectedMeetingId) await handleSelectMeeting(id);
+    else if (!selectedMeeting) await loadMeetingDetail(id);
+    setSummaryRequest({meetingId: id, request: Date.now()});
   };
 
   // 推送到讯飞智能办公本：读写驿站（纪要全文 DOCX）+ 办公本笔记（录音笔记），两个目标独立返回结果
@@ -586,9 +561,6 @@ export const App: React.FC = () => {
       <Header
         deviceStatus={deviceStatus}
         onOpenMemory={()=>{setDocumentSelection(null);setSidebarTab('memory');}}
-        isQuickBarOpen={isQuickBarOpen}
-        onToggleQuickBar={() => setIsQuickBarOpen((v) => !v)}
-        isRecording={isRecording}
       />
 
       {/* 桌面端三栏工作台主体 */}
@@ -602,13 +574,16 @@ export const App: React.FC = () => {
           meetings={meetings}
           selectedMeetingId={selectedMeetingId}
           onSelectMeeting={handleSelectMeeting}
+          onOpenSummary={openMeetingSummary}
+          onGenerateSummary={async (id, force) => { await openMeetingSummary(id); void handleGenerateAiSummary({force}, id); }}
+          generatingMeetingId={generatingMeetingId}
           pushedMeetingIds={pushedMeetingIds}
           onDeleteMeeting={handleDeleteMeeting}
           onPushToNotebook={handlePushToNotebook}
           isPushing={isPushing}
           deviceStatus={deviceStatus}
           onOpenNotebookHub={() => setIsNotebookHubOpen(true)}
-          onOpenSettings={() => setIsSettingsOpen(true)}
+          onOpenSettings={() => {setSettingsInitialTab('general');setIsSettingsOpen(true);}}
           isRecording={isRecording}
           onToggleRecord={handleToggleRecord}
           onOpenDocument={openDocument}
@@ -625,6 +600,14 @@ export const App: React.FC = () => {
           <TranscriptionWorkspace
             meeting={isRecording ? null : selectedMeeting}
             memorySeek={memorySeek}
+            summaryRequest={summaryRequest}
+            onGenerateAiSummary={handleGenerateAiSummary}
+            isGeneratingAi={generatingMeetingId === selectedMeeting?.id}
+            generationBusy={!!generatingMeetingId}
+            generationError={summaryErrors[selectedMeeting?.id || ''] || ''}
+            pendingTodoIds={new Set((selectedMeeting?.aiSummary?.todos || []).filter(t => pendingTodos.has(`${selectedMeeting?.id}:${t.id}`)).map(t => t.id))}
+            onToggleTodo={handleToggleTodo}
+            onOpenMemory={openMemorySource}
             onUpdateTitle={handleUpdateTitle}
             onSentenceEdit={handleSentenceEdit}
             isRecording={isRecording}
@@ -632,61 +615,36 @@ export const App: React.FC = () => {
             isPaused={isPaused}
             onPauseResume={handlePauseResume}
             onStopRecording={handleToggleRecord}
+            onAddBookmark={() => {
+              if (!isRecording) return;
+              const mark: Partial<Sentence> = {id: `bm_${Date.now()}`, speaker: '重点打标', time: recordingDuration, startTimeMs: recordingSeconds * 1000, text: `📌 重点标记点 [${recordingDuration}]`};
+              currentSentencesRef.current.push(mark);
+              setLiveSentences(prev => [...prev, mark]);
+              toast.success(`已在 ${recordingDuration} 标记重点`);
+            }}
             liveSentences={liveSentences}
             latestSentence={latestSentence}
           />
           </div>
         </div>
 
-        {/* 右栏：AI 会议大脑与智能办公本推屏面板 (392px，完全匹配 setting.ini 布局) */}
+        {/* 右栏：AI 问答与智能办公本推屏面板 (392px，完全匹配 setting.ini 布局) */}
         <div className="w-[392px] shrink-0 h-full overflow-hidden bg-slate-950/40">
           <AiSummaryPanel
             meeting={selectedMeeting}
-            meetings={meetings}
+            currentSource={sidebarTab === 'memory'
+              ? (documentSelection ? {id:documentSelection.id,title:'当前选中文档',type:'document'} : null)
+              : selectedMeeting ? {id:selectedMeeting.id,title:selectedMeeting.title,type:'meeting'} : null}
+            onOpenQaSettings={() => {setSettingsInitialTab('qa');setIsSettingsOpen(true);}}
             onOpenMemory={openMemorySource}
-            onGenerateAiSummary={handleGenerateAiSummary}
-            isGeneratingAi={isGeneratingAi}
-            onToggleTodo={handleToggleTodo}
             onPushToNotebook={handlePushToNotebook}
             isPushing={isPushing}
             isPushed={selectedMeeting ? pushedMeetingIds.has(selectedMeeting.id) : false}
             pushedResult={pushedResult}
             notebookDevice={deviceStatus?.officeNotebook || null}
-            isQuickBarOpen={isQuickBarOpen}
-            onToggleQuickBar={() => setIsQuickBarOpen(!isQuickBarOpen)}
           />
         </div>
       </div>
-
-      {/* 主窗口内快捷录音胶囊：收起不停录 */}
-      <SuspendQuickWindow
-        isOpen={isQuickBarOpen}
-        onClose={() => setIsQuickBarOpen(false)}
-        isRecording={isRecording}
-        isPaused={isPaused}
-        onStartRecord={handleToggleRecord}
-        onPauseResume={handlePauseResume}
-        onStopRecording={handleToggleRecord}
-        onFinishAndSummarize={handleFinishAndSummarize}
-        recordingDuration={recordingDuration}
-        latestSentence={latestSentence}
-        analyser={analyserNode}
-        autoSummarize={autoSummaryEnabled}
-        onAddBookmark={() => {
-          if (!isRecording) return;
-          const bmItem: Partial<Sentence> = {
-            id: `bm_${Date.now()}`,
-            speaker: '重点打标',
-            time: recordingDuration,
-            startTimeMs: recordingSeconds * 1000,
-            text: `📌 重点标记点 [${recordingDuration}]`
-          };
-          currentSentencesRef.current.push(bmItem);
-          setLiveSentences((prev) => [...prev, bmItem]);
-          setLatestSentence(`📌 已在 ${recordingDuration} 添加重点标记`);
-          toast.success(`已在 ${recordingDuration} 标记重点`, { title: '快捷标记' });
-        }}
-      />
 
       {/* 科大讯飞智能办公本云端互联工作台 */}
       <NotebookHubModal
@@ -697,6 +655,7 @@ export const App: React.FC = () => {
 
       {/* 硬件与算法设置 */}
       <SettingsModal
+        initialTab={settingsInitialTab}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />

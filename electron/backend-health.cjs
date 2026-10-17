@@ -8,7 +8,7 @@ function checkBackend(port, version) {
       res.on('end', () => {
         try {
           const data = JSON.parse(body);
-          resolve(res.statusCode === 200 && data.app === 'OpeniFLYTEK' && data.version === version && data.capabilities?.includes('memory-panorama'));
+          resolve(res.statusCode === 200 && data.app === 'OpeniFLYTEK' && data.version === version && ['memory-panorama','qa-source-policy'].every(capability => data.capabilities?.includes(capability)));
         } catch { resolve(false); }
       });
       res.on('error', () => resolve(false));

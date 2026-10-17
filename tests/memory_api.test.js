@@ -15,7 +15,7 @@ test('HTTP: recording auto-capture, unscoped chat, citation validation and delet
     const input = JSON.parse(body);
     const extraction = input.messages[0].content.includes('提取可追溯');
     const knowledge = input.messages[0].content.includes('知识单元');
-    const content = knowledge ? {overview:'科研资料',units:[{type:'concept',question:'科研预算',answer:'八万元',basis:'fact',pages:[1]}]} : extraction ? { facts: [] } : { answer: '科研项目预算为八万元。[1]', citations: [1] };
+    const content = knowledge ? {overview:'科研资料',units:[{type:'concept',question:'科研预算',answer:'八万元',basis:'fact',pages:[1]}]} : extraction ? { facts: [] } : { sections: [{kind:'library',text:'科研项目预算为八万元。[1]',refs:[1]}] };
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ model: 'fixture', choices: [{ message: { content: JSON.stringify(content) } }] }));
   });

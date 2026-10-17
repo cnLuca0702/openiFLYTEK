@@ -162,10 +162,10 @@ export const api = {
 
   // 切换真实待办状态
   async toggleTodo(meetingId: string, todoId: string): Promise<TodoItem[]> {
-    const res = await fetch(`${BASE_URL}/meetings/${meetingId}/todos/${todoId}/toggle`, {
+    const json = await apiFetch(`${BASE_URL}/meetings/${encodeURIComponent(meetingId)}/todos/${encodeURIComponent(todoId)}/toggle`, {
       method: 'POST',
     });
-    const json = await res.json();
+    if (json?.code !== '000000' || !Array.isArray(json.data)) throw new Error(json?.desc || '更新待办状态失败');
     return json.data;
   },
 

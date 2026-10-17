@@ -1,10 +1,12 @@
 const { app, BrowserWindow, Menu, ipcMain, shell, systemPreferences, nativeImage, dialog } = require('electron');
 const path = require('node:path');
+const {pathToFileURL} = require('node:url');
 const { fork } = require('node:child_process');
 const fs = require('node:fs');
 const net = require('node:net');
 const {checkBackend, waitForBackend} = require('./backend-health.cjs');
 const {version} = require('../package.json');
+const asrInstaller = require('./asr-installer.cjs').createAsrInstaller();
 
 let mainWindow = null;
 let serverProcess = null;
@@ -61,6 +63,12 @@ function createMainWindow() {
         webSecurity: false,
         allowRunningInsecureContent: true,
       },
+    });
+
+    // Web research citations and provider setup links open in the system browser.
+    mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+      try { if (['https:', 'http:'].includes(new URL(url).protocol)) void shell.openExternal(url); } catch (_) {}
+      return { action: 'deny' };
     });
 
     const distPath = path.join(__dirname, '../dist/index.html');
@@ -124,11 +132,6 @@ function setupMacMenu() {
             label: '开始/结束 会议录音', 
             accelerator: 'Cmd+N', 
             click: () => { mainWindow?.webContents.send('toggle-recording'); } 
-          },
-          { 
-            label: '切换桌面悬浮胶囊', 
-            accelerator: 'Cmd+Shift+R', 
-            click: () => { mainWindow?.webContents.send('toggle-quickbar'); } 
           },
           { type: 'separator' },
           { 
@@ -261,3 +264,21 @@ ipcMain.on('window-close', () => {
 ipcMain.on('open-external', (_event, url) => {
   shell.openExternal(url);
 });
+
+// Installation is desktop-only; the unauthenticated HTTP API cannot launch installers.
+for (const [channel, action] of Object.entries({
+  'asr-install-start': () => asrInstaller.start(),
+  'asr-install-status': () => asrInstaller.status(),
+  'asr-install-log': () => shell.openPath(asrInstaller.logPath()),
+})) {
+  ipcMain.handle(channel, (event) => {
+    const frameUrl = event.senderFrame?.url || '';
+    const bundleUrl = pathToFileURL(path.join(__dirname, '../dist/index.html')).href;
+    const isDev = process.env.NODE_ENV === 'development' || process.argv.includes('--dev');
+    const trustedUrl = frameUrl.split(/[?#]/)[0] === bundleUrl || (isDev && /^http:\/\/localhost:3000(?:\/|$)/.test(frameUrl));
+    if (!trustedUrl || !mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+      throw new Error('仅允许主窗口操作本地语音安装');
+    }
+    return action();
+  });
+}

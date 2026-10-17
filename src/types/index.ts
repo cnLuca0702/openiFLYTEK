@@ -71,7 +71,7 @@ export interface AsrConfig {
 }
 
 export interface AsrStatus {
-  local: { available: boolean; cli: boolean; model: string };
+  local: { available: boolean; cli: boolean; model: string; ffmpeg?: boolean };
   online: { available: boolean };
 }
 

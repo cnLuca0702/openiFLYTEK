@@ -1,0 +1,40 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import http from 'node:http';
+import {spawn} from 'node:child_process';
+import {once} from 'node:events';
+const listen=async s=>{s.listen(0,'127.0.0.1');await once(s,'listening');return s.address().port;};
+const waitFor=async check=>{for(let i=0;i<100;i++){if(await check())return;await new Promise(r=>setTimeout(r,30));}assert.fail('condition timed out');};
+test('HTTP question defaults, streaming stages, cancellation and missing search credentials', {timeout:20000},async t=>{
+  const home=fs.mkdtempSync(path.join(os.tmpdir(),'qa-http-'));let slow=false,started=false,cancelled=false;
+  const model=http.createServer(async(req,res)=>{
+    let body='';for await(const b of req)body+=b;
+    const input=JSON.parse(body);assert.ok(input.messages[0].content.includes('model'));
+    started=true;
+    if(slow){res.on('close',()=>{if(!res.writableEnded)cancelled=true;});return;}
+    res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({sections:[{kind:'model',text:'模型回答',refs:[]}]})}}]}));
+  });
+  const modelPort=await listen(model),reservation=http.createServer(),port=await listen(reservation);await new Promise(r=>reservation.close(r));
+  const configDir=path.join(home,'Library/Application Support/VIAIM Studio/config');fs.mkdirSync(configDir,{recursive:true});
+  fs.writeFileSync(path.join(configDir,'llm.json'),JSON.stringify({provider:'custom',providers:{custom:{apiKey:'fixture',model:'fixture',baseUrl:`http://127.0.0.1:${modelPort}`}}}));
+  const child=spawn(process.execPath,['server/server.js'],{env:{...process.env,HOME:home,PORT:String(port),VIAIM_MEMORY_SKIP_OFFICIAL:'1'},stdio:['ignore','ignore','ignore']});
+  t.after(async()=>{if(child.exitCode===null){child.kill();await once(child,'exit');}model.closeAllConnections();await new Promise(r=>model.close(r));fs.rmSync(home,{recursive:true,force:true});});
+  const base=`http://127.0.0.1:${port}/api`,request=(p,method='GET',body,options={})=>fetch(base+p,{method,headers:{'Content-Type':'application/json',...options.headers},body:body===undefined?undefined:JSON.stringify(body),signal:options.signal});
+  await waitFor(async()=>{try{return (await request('/health')).ok;}catch{return false;}});
+  const policy={scope:'none',sourceIds:[],allowModelKnowledge:true,webResearch:false};
+  const saved=await(await request('/ai/config','PUT',{defaults:policy})).json();assert.equal(saved.data.defaults.scope,'none');assert.equal(saved.data.tavilyApiKey,undefined);
+  const chat=await(await request('/ai/chat','POST',{question:'解释概念'})).json();assert.equal(chat.data.sections[0].kind,'model');assert.equal(chat.data.metadata.policy.scope,'none');
+  const stream=await request('/ai/chat','POST',{question:'流式验证'},{headers:{Accept:'application/x-ndjson'}});const lines=(await stream.text()).trim().split('\n').map(s=>JSON.parse(s));
+  assert.equal(lines[0].type,'progress');assert.equal(lines[0].stage,'answering');assert.equal(lines.at(-1).data.model,'fixture');
+  const failed=await request('/ai/chat','POST',{question:'联网验证',policy:{...policy,allowModelKnowledge:false,webResearch:true},searchQuery:'公开信息'},{headers:{Accept:'application/x-ndjson'}});
+  const errorLines=(await failed.text()).trim().split('\n').map(s=>JSON.parse(s));assert.equal(errorLines.at(-1).type,'error');assert.match(errorLines.at(-1).message,/密钥/);
+  slow=true;started=false;const controller=new AbortController();
+  const response=await request('/ai/chat','POST',{question:'停止验证'},{headers:{Accept:'application/x-ndjson'},signal:controller.signal});
+  const reader=response.body.getReader();assert.match(new TextDecoder().decode((await reader.read()).value),/progress/);
+  await waitFor(()=>started);controller.abort();await reader.cancel().catch(()=>{});await waitFor(()=>cancelled);
+  assert.equal((await request('/ai/chat','POST',{question:'空范围',policy:{...policy,allowModelKnowledge:false}})).status,400);
+  assert.ok((await(await request('/health')).json()).capabilities.includes('qa-source-policy'));
+});

@@ -1,22 +1,16 @@
 import React from 'react';
-import { Mic, User } from 'lucide-react';
+import { User } from 'lucide-react';
 import { DevicesStatusResponse } from '../types';
 import appIcon from '../assets/app-icon.png';
 
 interface HeaderProps {
   deviceStatus: DevicesStatusResponse | null;
   onOpenMemory: () => void;
-  isQuickBarOpen: boolean;
-  onToggleQuickBar: () => void;
-  isRecording: boolean;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   deviceStatus,
   onOpenMemory,
-  isQuickBarOpen,
-  onToggleQuickBar,
-  isRecording,
 }) => {
   const user = deviceStatus?.user;
 
@@ -28,22 +22,6 @@ export const Header: React.FC<HeaderProps> = ({
       {/* 左侧弹性空区：整体留白（为 macOS 红绿灯按钮预留） */}
       <div className="flex-1 min-w-0" />
 
-      <button
-        type="button"
-        onClick={onToggleQuickBar}
-        className={`text-sm px-3 py-1.5 rounded-lg border flex items-center gap-1.5 transition-colors ${
-          isQuickBarOpen
-            ? 'bg-viaim-primary/15 border-viaim-primary/40 text-viaim-primary'
-            : isRecording
-              ? 'bg-red-500/10 border-red-500/40 text-red-500'
-              : 'bg-viaim-card border-viaim-border text-viaim-textMuted hover:text-viaim-textMain hover:bg-viaim-cardHover'
-        }`}
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        title={isQuickBarOpen ? '收起快捷录音胶囊' : '打开快捷录音胶囊'}
-      >
-        <Mic className={`w-3.5 h-3.5 ${isRecording && !isQuickBarOpen ? 'animate-pulse' : ''}`} />
-        <span>快捷录音</span>
-      </button>
       <button onClick={onOpenMemory} className="text-sm text-cyan-300 px-3 py-1.5 rounded bg-slate-800" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>记忆与资料</button>
       {/* 用户（右对齐） */}
       <div

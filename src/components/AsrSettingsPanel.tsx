@@ -39,6 +39,41 @@ export const AsrSettingsPanel: React.FC<AsrSettingsPanelProps> = ({ onConfigChan
   const [asr, setAsr] = useState<AsrConfig>({ mode: 'local', priority: 'local' });
   const [status, setStatus] = useState<AsrStatus | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const desktop = (window as any).electronAPI;
+  const canInstall = desktop?.platform === 'darwin' && !!desktop?.installLocalAsr;
+  const [install, setInstall] = useState<{state:string;running:boolean;message:string;downloadedBytes?:number;totalBytes?:number}>({state:'idle',running:false,message:''});
+  const [starting, setStarting] = useState(false);
+  const [installError, setInstallError] = useState('');
+
+  useEffect(() => {
+    if (!canInstall) return;
+    let live = true, busy = false, lastState = '';
+    const poll = async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const next = await desktop.localAsrInstallStatus();
+        if (!live) return;
+        setInstall(next);
+        if (next.state === 'complete' && lastState !== 'complete') {
+          const current = await api.getAsrStatus();
+          if (live) setStatus(current);
+        }
+        lastState = next.state;
+      } catch (e:any) { if (live) setInstallError(e.message || '无法读取安装状态'); }
+      finally { busy = false; }
+    };
+    void poll();
+    const timer = setInterval(poll, 2000);
+    return () => { live = false; clearInterval(timer); };
+  }, [canInstall]);
+
+  const startInstall = async () => {
+    setStarting(true); setInstallError('');
+    try { setInstall(await desktop.installLocalAsr()); }
+    catch (e:any) { setInstallError(e.message || '安装未能启动，请重试'); }
+    finally { setStarting(false); }
+  };
 
   useEffect(() => {
     (async () => {
@@ -149,11 +184,26 @@ export const AsrSettingsPanel: React.FC<AsrSettingsPanelProps> = ({ onConfigChan
             )}
             <span className="text-[11px] font-bold text-viaim-textMain">本地 whisper.cpp</span>
           </div>
-          <p className="text-[10px] text-viaim-textDim font-mono break-all">
-            {status?.local.cli
-              ? status.local.model || '已安装 CLI，未找到模型'
-              : '未安装（brew install whisper-cpp）'}
+          <p className="text-[10px] text-viaim-textDim break-all">
+            {localOk ? `已就绪 · ${status?.local.model}` : !status ? '正在检查本机环境…' : !status.local.cli ? '识别引擎尚未安装' : !status.local.model ? '需要下载语音模型' : '需要安装音频转换工具'}
           </p>
+          {canInstall ? (
+            <div className="mt-2 space-y-2">
+              {(!localOk || install.running) && <>
+                <p className="text-[10px] text-viaim-textDim">自动安装识别引擎、音频工具和多语种模型（约 148 MB）。首次准备环境时可能需要 Mac 密码授权。</p>
+                <button type="button" disabled={starting || install.running} onClick={() => void startInstall()}
+                  className="px-3 py-1.5 text-xs rounded-lg bg-viaim-primary text-white disabled:opacity-50 flex items-center gap-1">
+                  {(starting || install.running) && <Loader2 size={12} className="animate-spin" />}
+                  {starting || install.running ? '正在安装…' : install.state === 'error' ? '重试安装' : '一键安装本地转写'}
+                </button>
+              </>}
+              {install.message && <p role="status" className="text-[11px] text-viaim-textMuted">{install.message}</p>}
+              {install.state === 'model' && <progress aria-label="模型下载进度" className="w-full" max={install.totalBytes || 147951465} value={install.downloadedBytes || 0} />}
+              {install.state !== 'idle' && <button type="button" className="text-xs text-viaim-primary" onClick={() => void desktop.openAsrInstallLog().then((error:string) => { if(error)setInstallError('暂时无法打开日志：'+error); }).catch((e:any)=>setInstallError(e.message))}>查看安装日志</button>}
+              <button type="button" className="ml-2 text-xs text-viaim-primary" onClick={() => void api.getAsrStatus().then(setStatus).catch((e:any)=>setInstallError(e.message))}>重新检查</button>
+              {installError && <p role="alert" className="text-xs text-red-600">{installError}</p>}
+            </div>
+          ) : !localOk && <p className="mt-2 text-[10px] text-viaim-textDim">请在 macOS 桌面版中点击一键安装。</p>}
         </div>
         <div className={`p-3 rounded-xl border ${onlineOk ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-amber-500/40 bg-amber-500/5'}`}>
           <div className="flex items-center gap-1.5 mb-1">

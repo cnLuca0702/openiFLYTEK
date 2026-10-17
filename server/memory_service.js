@@ -148,8 +148,7 @@ quote 必须同时覆盖项目名、单位、属性对象、值以及替代/简�
     const changes=this.store.projectMemory({now:this.now()}).flatMap(p=>p.states.filter(s=>s.links.length||s.status==='conflict').filter(s=>!meetingId||s.history.some(h=>h.sourceId===meetingId||this.store.evidence(h.chunkId)?.meetingId===meetingId)).map(s=>({project:p.name,scope:p.scope,...s}))).filter(s=>accept(s.history.map(h=>h.chunkId)));
     return {followups,changes,citations:[...citations.values()],pending:this.store.status().pending};
   }
-  async answer({ question, meetingIds = [], currentMeetingId, providerId, model }) {
-    if (!meetingIds.length && currentMeetingId && /这场|这次|本次|当前会议|这个会议/.test(question)) meetingIds = [currentMeetingId];
+  async answerContext(question, meetingIds = []) {
     const recalled = await this.recall(question, { meetingIds });
     const context = this.projectContext(question, recalled, meetingIds);
     const evidence = context.evidence;
@@ -160,6 +159,10 @@ quote 必须同时覆盖项目名、单位、属性对象、值以及替代/简�
       for(const c of sources)if(!evidence.some(e=>e.chunkId===c.chunkId))evidence.push(c);
       return true;
     });
+    return {evidence, context, followups};
+  }
+  async answer({ question, meetingIds = [], providerId, model }) {
+    const {evidence, context, followups} = await this.answerContext(question, meetingIds);
     if (!evidence.length) return { answer: '当前可读取的记忆中未找到相关依据。可以补充项目名、人物或关键词。', model: '', citations: [], memoryWarnings: context.warnings };
     const sources = evidence.map((c, i) => ({ ...c, ref: i + 1 }));
     const projects = context.entities.map((e) => ({ ...e, states: e.states.map((state) => ({ ...state,

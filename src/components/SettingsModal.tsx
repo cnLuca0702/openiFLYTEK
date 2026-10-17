@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   X,
   Settings,
@@ -9,23 +9,27 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { LlmSettingsPanel } from './LlmSettingsPanel';
+import { QaSettingsPanel } from './QaSettingsPanel';
 import { AsrSettingsPanel } from './AsrSettingsPanel';
 
 interface SettingsModalProps {
   isOpen: boolean;
+  initialTab?: SettingsTab;
   onClose: () => void;
 }
 
-type SettingsTab = 'general' | 'llm' | 'asr';
+type SettingsTab = 'general' | 'llm' | 'asr' | 'qa';
 
 const TABS: Array<{ id: SettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: '通用与硬件', icon: <SlidersHorizontal className="w-3.5 h-3.5" /> },
   { id: 'llm', label: '大模型LLM设置', icon: <Cpu className="w-3.5 h-3.5" /> },
+  { id: 'qa', label: 'AI 问答', icon: <Cpu className="w-3.5 h-3.5" /> },
   { id: 'asr', label: '语音转写 ASR', icon: <AudioLines className="w-3.5 h-3.5" /> },
 ];
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, initialTab = 'general' }) => {
   const [activeTab, setActiveTab] = useState<SettingsTab>('general');
+  useEffect(() => {if (isOpen) setActiveTab(initialTab);}, [isOpen, initialTab]);
   const [aecEnabled, setAecEnabled] = useState(true);
   const [language, setLanguage] = useState('zh_cn');
   const [autoSyncNotebook, setAutoSyncNotebook] = useState(false);
@@ -152,6 +156,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
 
           {activeTab === 'llm' && <LlmSettingsPanel />}
 
+          {activeTab === 'qa' && <QaSettingsPanel />}
           {activeTab === 'asr' && <AsrSettingsPanel />}
         </div>
 

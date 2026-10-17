@@ -12,11 +12,13 @@ test('桌面启动拒绝旧 HTML 后端、错误版本和缺失能力，等待�
   const port = server.address().port;
   assert.equal(await health.checkBackend(port, '1.2.0'), false);
   status = 200;
-  response = JSON.stringify({app:'OpeniFLYTEK', version:'1.1.0', capabilities:['memory-panorama']});
+  response = JSON.stringify({app:'OpeniFLYTEK', version:'1.1.0', capabilities:['memory-panorama','qa-source-policy']});
   assert.equal(await health.checkBackend(port, '1.2.0'), false);
   response = JSON.stringify({app:'OpeniFLYTEK', version:'1.2.0', capabilities:[]});
   assert.equal(await health.checkBackend(port, '1.2.0'), false);
-  const timer = setTimeout(() => {response = JSON.stringify({app:'OpeniFLYTEK', version:'1.2.0', capabilities:['memory-panorama']});}, 200);
+  response = JSON.stringify({app:'OpeniFLYTEK', version:'1.2.0', capabilities:['memory-panorama']});
+  assert.equal(await health.checkBackend(port, '1.2.0'), false);
+  const timer = setTimeout(() => {response = JSON.stringify({app:'OpeniFLYTEK', version:'1.2.0', capabilities:['memory-panorama','qa-source-policy']});}, 200);
   t.after(() => clearTimeout(timer));
   await health.waitForBackend(port, '1.2.0', {exitCode:null}, 2000);
   await assert.rejects(health.waitForBackend(port, '1.2.0', {exitCode:1}), /启动失败/);

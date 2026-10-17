@@ -18,8 +18,9 @@ import { publicProviders } from './llm_providers.js';
 import { getPublicConfig, updateProviderConfig, saveConfig, updateEmbeddingConfig } from './llm_config.js';
 import { startChatGptLogin, getChatGptLoginStatus, logoutChatGpt } from './chatgpt_oauth.js';
 import { testProvider, listModels } from './llm_client.js';
-import { generateMeetingSummary, buildTranscript } from './summary_service.js';
-import { chat as llmChat } from './llm_client.js';
+import { generateMeetingSummary } from './summary_service.js';
+import { answerQuestion, listQaSources } from './qa_service.js';
+import { readQaConfig, publicQaConfig, saveQaConfig } from './qa_config.js';
 import { transcribeMeetingAudio, transcribeLiveTail, getAsrStatus } from './asr_service.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -30,7 +31,7 @@ const port = process.env.PORT || 3800;
 
 const appVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf8')).version;
 app.use(cors());
-app.get('/api/health', (_req, res) => res.json({app:'OpeniFLYTEK', version:appVersion, capabilities:['memory-panorama']}));
+app.get('/api/health', (_req, res) => res.json({app:'OpeniFLYTEK', version:appVersion, capabilities:['memory-panorama','qa-source-policy']}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -322,62 +323,40 @@ app.post('/api/meetings/:id/generate-ai', async (req, res) => {
 
 // ======================== 大模型服务商配置 ========================
 
-// AI 问答默认自动检索会议记忆；@ 仍可限定范围，记忆不可用时保留原有指定会议路径。
+// Question policy is validated on the server; streaming stages reflect actual work.
+app.get('/api/ai/config', (_req,res) => {
+  try {res.json({code:'000000',data:publicQaConfig()});} catch(e){res.status(500).json({code:'QA_CONFIG_ERROR',desc:e.message});}
+});
+app.put('/api/ai/config', (req,res) => {
+  try {res.json({code:'000000',data:saveQaConfig(req.body||{})});} catch(e){res.status(400).json({code:'QA_CONFIG_ERROR',desc:e.message});}
+});
+app.get('/api/ai/sources', (_req,res) => {
+  try {res.json({code:'000000',data:listQaSources(memory)});} catch(e){res.status(503).json({code:'MEMORY_UNAVAILABLE',desc:e.message});}
+});
 app.post('/api/ai/chat', async (req, res) => {
+  const controller=new AbortController();
+  const abort=()=>{if(!res.writableEnded)controller.abort();};
+  res.on('close',abort);
+  const streaming=req.get('accept')==='application/x-ndjson';
+  const send=event=>{if(!controller.signal.aborted&&!res.writableEnded)res.write(JSON.stringify(event)+'\n');};
+  if(streaming){res.setHeader('Content-Type','application/x-ndjson; charset=utf-8');res.setHeader('Cache-Control','no-cache');res.flushHeaders();}
   try {
-    const { question, meetingIds = [], currentMeetingId, providerId, model } = req.body || {};
-    if (!question || !String(question).trim()) {
-      return res.status(400).json({ code: '400', desc: '问题不能为空' });
-    }
-    const ids = Array.isArray(meetingIds)
-      ? meetingIds.filter((id) => typeof id === 'string' && id.trim()).slice(0, 5)
-      : [];
-    if (memory) {
-      const answer = await memory.answer({ question: String(question).trim().slice(0, 4000), meetingIds: ids, currentMeetingId: typeof currentMeetingId === 'string' ? currentMeetingId : undefined,
-        providerId: providerId || undefined, model: typeof model === 'string' ? model.trim() : undefined });
-      return res.json({ code: '000000', data: answer });
-    }
-    if (!ids.length) return res.status(503).json({ code: 'MEMORY_UNAVAILABLE', desc: '自动记忆暂不可用，可通过 @ 选择会议继续问答' });
-
-    const parts = [];
-    for (const id of ids) {
-      const meeting = getMeetingDetailById(id);
-      if (!meeting) continue;
-      parts.push([
-        `【会议：${meeting.title || '未命名'}】`,
-        `- 时间：${meeting.createdAt ? new Date(meeting.createdAt).toLocaleString('zh-CN') : '未知'}｜时长：${meeting.duration || '未知'}`,
-        meeting.aiSummary?.abstract ? `- 已生成纪要摘要：${String(meeting.aiSummary.abstract).trim()}` : '',
-        '- 转写原文：',
-        buildTranscript(meeting)
-      ].filter(Boolean).join('\n'));
-    }
-    if (!parts.length) {
-      return res.status(404).json({ code: '404', desc: '所选录音不存在或无法读取' });
-    }
-
-    const system = `你是一名会议智能问答助手，用户会针对一条或多条会议录音提问。
-规则：
-1. 只依据提供的会议转写与纪要内容回答，不要编造未出现的事实。
-2. 若问题与所选录音无关或信息不足，如实说明。
-3. 回答使用简体中文，条理清晰，可适当分点；引用内容注明来自哪场会议。`;
-    const user = `【用户选择的录音上下文】\n${parts.join('\n\n')}\n\n【用户问题】\n${String(question).trim()}`;
-
-    const result = await llmChat({
-      providerId: providerId || undefined,
-      override: typeof model === 'string' && model.trim() ? { model: model.trim() } : undefined,
-      system,
-      user,
-      temperature: 0.3,
-      maxTokens: 3072,
+    const config=readQaConfig(),body=req.body||{};
+    // Older clients' explicit meeting IDs still mean a strict selected scope.
+    const policy=body.policy || (Array.isArray(body.meetingIds)&&body.meetingIds.length
+      ? {...config.defaults,scope:'selected',sourceIds:body.meetingIds} : config.defaults);
+    const result=await answerQuestion({...body,policy,currentSourceId:body.currentSourceId||body.currentMeetingId}, {
+      memory,apiKey:config.tavilyApiKey,signal:controller.signal,
+      onProgress:(stage,message)=>{if(streaming)send({type:'progress',stage,message});}
     });
-    res.json({ code: '000000', data: { answer: String(result.content || '').trim(), model: result.model } });
-  } catch (err) {
-    const notConfigured = /未配置大模型|请先为|尚未登录 ChatGPT|ChatGPT 登录已过期/.test(err.message || '');
-    res.status(notConfigured ? 400 : 500).json({
-      code: notConfigured ? 'LLM_NOT_CONFIGURED' : '500',
-      desc: err.message || 'AI 问答失败'
-    });
-  }
+    if(controller.signal.aborted)return;
+    if(streaming){send({type:'result',data:result});res.end();}
+    else res.json({code:'000000',data:result});
+  } catch(err){
+    if(controller.signal.aborted)return;
+    if(streaming){send({type:'error',message:err.message||'AI 问答失败'});res.end();}
+    else res.status(/暂不可用/.test(err.message)?503:400).json({code:'QA_ERROR',desc:err.message||'AI 问答失败'});
+  } finally {res.off('close',abort);}
 });
 
 // 7.1 可选服务商清单
