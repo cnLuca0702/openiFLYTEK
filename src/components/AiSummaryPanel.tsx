@@ -192,7 +192,7 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
 
   return (
     <aside className="w-full h-full border-l border-viaim-border bg-viaim-card/70 backdrop-blur-md flex flex-col shrink-0 select-none">
-      {/* 快捷动作栏：悬浮录音条开关（单行） */}
+      {/* 次入口：与顶栏「快捷录音」同义，保留兼容 */}
       <div className="shrink-0 p-2 border-b border-viaim-border bg-viaim-bg/40">
         <button
           onClick={onToggleQuickBar}
@@ -201,10 +201,10 @@ export const AiSummaryPanel: React.FC<AiSummaryPanelProps> = ({
               ? 'bg-viaim-primary/15 border-viaim-primary/50 text-indigo-300'
               : 'bg-viaim-card border-viaim-border text-viaim-textMuted hover:bg-viaim-cardHover hover:text-viaim-textMain'
           }`}
-          title="手动打开 / 关闭 OpeniFLYTEK 独立桌面悬浮快速录音条"
+          title="打开 / 收起快捷录音胶囊（收起不停录）"
         >
           <LayoutTemplate className="w-3.5 h-3.5" />
-          <span>{isQuickBarOpen ? '关闭录音条' : '悬浮录音条'}</span>
+          <span>{isQuickBarOpen ? '收起快捷胶囊' : '快捷录音胶囊'}</span>
         </button>
       </div>
 

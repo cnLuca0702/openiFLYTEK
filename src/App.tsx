@@ -16,7 +16,7 @@ import { ConfirmHost } from './components/ConfirmHost';
 export const App: React.FC = () => {
   const toast = useToast();
   const [sidebarTab,setSidebarTab] = useState<'recordings'|'memory'>('recordings');
-  const [documentSelection,setDocumentSelection] = useState<{id:string;page?:number;request:number}|null>(null);
+  const [documentSelection,setDocumentSelection] = useState<{id:string;page?:number;request:number;quote?:string;fromTitle?:string}|null>(null);
   const [meetings, setMeetings] = useState<Meeting[]>([]);
   const [memorySeek, setMemorySeek] = useState<{ meetingId: string; startMs: number; request: number } | null>(null);
   const [selectedMeetingId, setSelectedMeetingId] = useState<string | null>(null);
@@ -53,6 +53,7 @@ export const App: React.FC = () => {
   const audioChunksRef = useRef<Blob[]>([]);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
+  const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
   const currentSentencesRef = useRef<Partial<Sentence>[]>([]);
   const speechRecognitionRef = useRef<any>(null);
 
@@ -215,6 +216,7 @@ export const App: React.FC = () => {
 
       audioContextRef.current = audioCtx;
       analyserRef.current = analyser;
+      setAnalyserNode(analyser);
 
       // 启动 MediaRecorder
       const mediaRecorder = new MediaRecorder(stream);
@@ -277,9 +279,10 @@ export const App: React.FC = () => {
       }
 
       setIsRecording(true);
+      setIsQuickBarOpen(true);
       setRecordingSeconds(0);
       setRecordingDuration('00:00');
-      setLatestSentence('麦克风双通道回声消除录制中...');
+      setLatestSentence('正在录音…');
     } catch (err: any) {
       toast.error(
         `麦克风访问被拒绝。请在「系统设置 → 隐私与安全性 → 麦克风」允许 OpeniFLYTEK。\n详情: ${err.message || '未知错误'}`,
@@ -309,7 +312,10 @@ export const App: React.FC = () => {
 
     if (audioContextRef.current) {
       audioContextRef.current.close().catch(() => {});
+      audioContextRef.current = null;
     }
+    analyserRef.current = null;
+    setAnalyserNode(null);
 
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
@@ -552,7 +558,17 @@ export const App: React.FC = () => {
 
   const openMemorySource = async (citation:MemoryCitation) => {
     const evidence = await api.memoryEvidence(citation);
-    if(evidence.sourceType==='document') {setDocumentSelection({id:evidence.meetingId,page:evidence.pages?.[0],request:Date.now()});setSidebarTab('memory');return;}
+    if(evidence.sourceType==='document') {
+      setDocumentSelection({
+        id: evidence.meetingId,
+        page: evidence.pages?.[0],
+        request: Date.now(),
+        quote: evidence.excerpt,
+        fromTitle: evidence.title || ''
+      });
+      setSidebarTab('memory');
+      return;
+    }
     if(isRecording)throw new Error('正在录音，结束录音后可定位播放');
     const detail=await api.getMeetingDetail(evidence.meetingId);
     if(!detail)throw new Error('来源会议已不可读取');
@@ -567,7 +583,13 @@ export const App: React.FC = () => {
   return (
     <div className="flex flex-col h-screen w-screen overflow-hidden bg-viaim-bg text-viaim-textMain select-none">
       {/* 顶部主导航栏（符合 Mac 沉浸式风格与原生交通灯对齐） */}
-      <Header deviceStatus={deviceStatus} onOpenMemory={()=>{setDocumentSelection(null);setSidebarTab('memory');}} />
+      <Header
+        deviceStatus={deviceStatus}
+        onOpenMemory={()=>{setDocumentSelection(null);setSidebarTab('memory');}}
+        isQuickBarOpen={isQuickBarOpen}
+        onToggleQuickBar={() => setIsQuickBarOpen((v) => !v)}
+        isRecording={isRecording}
+      />
 
       {/* 桌面端三栏工作台主体 */}
       <div className="flex flex-1 overflow-hidden">
@@ -636,30 +658,34 @@ export const App: React.FC = () => {
         </div>
       </div>
 
-      {/* VIAIM 特色：独立桌面悬浮快速录音胶囊 (SuspendQuickWindow) */}
+      {/* 主窗口内快捷录音胶囊：收起不停录 */}
       <SuspendQuickWindow
         isOpen={isQuickBarOpen}
         onClose={() => setIsQuickBarOpen(false)}
         isRecording={isRecording}
-        onToggleRecord={handleToggleRecord}
+        isPaused={isPaused}
+        onStartRecord={handleToggleRecord}
+        onPauseResume={handlePauseResume}
+        onStopRecording={handleToggleRecord}
+        onFinishAndSummarize={handleFinishAndSummarize}
         recordingDuration={recordingDuration}
         latestSentence={latestSentence}
+        analyser={analyserNode}
+        autoSummarize={autoSummaryEnabled}
         onAddBookmark={() => {
-          if (isRecording) {
-            const bmItem: Partial<Sentence> = {
-              id: `bm_${Date.now()}`,
-              speaker: '重点打标',
-              time: recordingDuration,
-              startTimeMs: recordingSeconds * 1000,
-              text: `📌 重点标记点 [${recordingDuration}]`
-            };
-            currentSentencesRef.current.push(bmItem);
-            setLiveSentences((prev) => [...prev, bmItem]);
-            setLatestSentence(`📌 已在 ${recordingDuration} 添加重点标记`);
-          }
+          if (!isRecording) return;
+          const bmItem: Partial<Sentence> = {
+            id: `bm_${Date.now()}`,
+            speaker: '重点打标',
+            time: recordingDuration,
+            startTimeMs: recordingSeconds * 1000,
+            text: `📌 重点标记点 [${recordingDuration}]`
+          };
+          currentSentencesRef.current.push(bmItem);
+          setLiveSentences((prev) => [...prev, bmItem]);
+          setLatestSentence(`📌 已在 ${recordingDuration} 添加重点标记`);
+          toast.success(`已在 ${recordingDuration} 标记重点`, { title: '快捷标记' });
         }}
-        onFinishAndSummarize={handleFinishAndSummarize}
-        onRestoreMainWindow={() => setIsQuickBarOpen(false)}
       />
 
       {/* 科大讯飞智能办公本云端互联工作台 */}

@@ -23,7 +23,7 @@ try {
       const file=files.find(f=>p.endsWith(f.id));
       if(deleted&&file?.id==='document:b')return route.fulfill({status:404,json:{desc:'文档不存在'}});
       if(delay&&file?.id==='document:a')await new Promise(r=>setTimeout(r,500));
-      data={...file,pages:[{number:1,label:'第 1 页',text:'第一页原文',image:false},{number:2,label:'第 2 页',text:'第二页来源证据',image:false}],knowledge:[{overview:'方案概览',units:[{question:`${file?.name}的主要知识`,answer:'保养设备并定期核对接口。',basis:'fact',pages:[2]}]}]};
+      data={...file,pages:[{number:1,label:'第 1 页',text:'第一页原文',image:false},{number:2,label:'第 2 页',text:'第二页来源证据',image:false}],knowledge:[{overview:'方案概览',units:[{question:`${file?.name}的主要知识`,answer:'保养设备并定期核对接口。',basis:'fact',pages:[2]}]},{overview:'第二章',units:[{question:'其他章节知识',answer:'跨章节搜索验证',basis:'interpretation',pages:[1]}]}]};
     }
     else if(p==='/api/memory/panorama')data={sources:empty?[]:[...files.map((f,i)=>({id:f.id,title:f.name,type:'document',date:'2026-10-15',chunks:2,facts:2,knowledgeUnits:1,citation:{...citation,meetingId:f.id,sourceType:'document',pages:[1],chunkId:i+2}})),{id:meeting.id,title:meeting.title,type:'meeting',date:'2026-10-15',chunks:1,facts:1,knowledgeUnits:0,citation}],topics:empty?[]:[{id:'topic-a',type:'project',scope:'甲公司',name:'设备维护',sourceIds:['document:a','meeting:a'],facts:3},{id:'topic-b',type:'technology',scope:'',name:'接口设计',sourceIds:['document:b'],facts:2}],topicCount:empty?0:2,totals:{sources:empty?0:3,documents:empty?0:2,meetings:empty?0:1,knowledgeUnits:empty?0:2,facts:empty?0:5},pending:0,unavailable:0,limited:false};
     else if(p==='/api/memory/insights')data={followups:[],changes:[],citations:[],pending:0};
@@ -37,12 +37,20 @@ try {
   await work.getByRole('heading',{name:'知识全景',exact:true}).waitFor();
   await work.getByRole('button',{name:/设备维护方案.pdf/}).waitFor();
   assert.equal(await page.getByRole('dialog',{name:'记忆与资料',exact:true}).count(),0);
+  await work.getByRole('button',{name:'知识矩阵',exact:true}).click();
+  await work.getByRole('button',{name:/技术.*接口设计/}).click();
+  assert.equal(await work.getByLabel('筛选知识主题').inputValue(),'topic-b');
+  await work.getByRole('button',{name:'拓扑星系',exact:true}).click();
   await work.getByLabel('筛选知识主题').selectOption('topic-b');
   assert.equal(await work.getByRole('button',{name:/设备维护方案.pdf/}).count(),0);
   await work.getByLabel('筛选知识主题').selectOption('');
   if(process.env.SCREENSHOT_DIR)await page.screenshot({path:`${process.env.SCREENSHOT_DIR}/knowledge-panorama.png`});
   await page.locator('aside').getByRole('button',{name:'设备维护方案.pdf',exact:true}).click();
   await work.getByRole('heading',{name:'设备维护方案.pdf的主要知识'}).waitFor();
+  await work.getByRole('button',{name:/第 1 节/}).click();
+  await work.getByLabel('搜索本资料知识').fill('跨章节搜索验证');
+  await work.getByRole('heading',{name:'其他章节知识'}).waitFor();
+  await work.getByLabel('搜索本资料知识').fill('');
   await work.getByRole('button',{name:/核对来源/}).click();
   await work.getByText('第二页来源证据',{exact:true}).waitFor();
   assert.equal(await work.getByLabel('来源位置',{exact:true}).inputValue(),'2');
